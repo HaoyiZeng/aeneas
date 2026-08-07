@@ -1,0 +1,5 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_control_known_failures.llbc
+[[91mError[39m] Internal error, please file an issue
+Source: 'tests/src/lt-stateful-control-known-failures.rs', lines 59:4-68:5
+Compiler source: interp/InterpBorrows.ml, line 2076
+

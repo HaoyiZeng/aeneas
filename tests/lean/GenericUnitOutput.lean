@@ -27,4 +27,14 @@ def call_with_unit (n : Std.U32) : Result Std.U32 := do
   let (_, n2) ← set_and_return n1 2#u32 ()
   ok n2
 
+/-- [generic_unit_output::touch_unit]:
+    Source: 'tests/src/generic_unit_output.rs', lines 23:0-25:1 -/
+def touch_unit (_ : Unit) : Result Unit := do
+  ok ()
+
+/-- [generic_unit_output::call_touch_unit]:
+    Source: 'tests/src/generic_unit_output.rs', lines 27:0-31:1 -/
+def call_touch_unit : Result Unit := do
+  touch_unit ()
+
 end generic_unit_output

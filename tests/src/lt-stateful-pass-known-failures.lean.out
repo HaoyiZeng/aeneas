@@ -1,0 +1,5 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_pass_known_failures.llbc
+[[91mError[39m] Could not match the contexts
+Source: 'tests/src/lt-stateful-pass-known-failures.rs', lines 1:0-62:5
+Compiler source: interp/InterpJoin.ml, line 1542
+

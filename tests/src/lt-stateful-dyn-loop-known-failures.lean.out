@@ -1,0 +1,5 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_dyn_loop_known_failures.llbc
+[[91mError[39m] Dynamic trait types are not supported yet
+Source: 'tests/src/lt-stateful-dyn-loop-known-failures.rs', lines 51:30-51:51
+Compiler source: symbolic/SymbolicToPureTypes.ml, line 578
+

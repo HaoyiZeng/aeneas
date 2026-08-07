@@ -1,0 +1,8 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_wrapper_projection_known_failures.llbc
+[[91mError[39m] Could not find var for symbolic value: 8
+Source: 'tests/src/lt-stateful-wrapper-projection-known-failures.rs', lines 43:0-45:1
+Compiler source: symbolic/SymbolicToPureCore.ml, line 532
+[[91mError[39m] Could not find var for symbolic value: 8
+Source: 'tests/src/lt-stateful-wrapper-projection-known-failures.rs', lines 43:0-45:1
+Compiler source: symbolic/SymbolicToPureCore.ml, line 532
+

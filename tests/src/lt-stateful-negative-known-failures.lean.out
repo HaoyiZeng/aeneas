@@ -1,0 +1,8 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_negative_known_failures.llbc
+[[91mError[39m] Could not find var for symbolic value: 7
+Source: 'tests/src/lt-stateful-negative-known-failures.rs', lines 107:0-111:1
+Compiler source: symbolic/SymbolicToPureCore.ml, line 532
+[[91mError[39m] Could not find var for symbolic value: 7
+Source: 'tests/src/lt-stateful-negative-known-failures.rs', lines 107:0-111:1
+Compiler source: symbolic/SymbolicToPureCore.ml, line 532
+

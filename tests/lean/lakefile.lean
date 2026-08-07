@@ -5,6 +5,15 @@ require aeneas from "../../backends/lean"
 
 package «tests» {}
 
+@[default_target] lean_lib LtStatefulContractCheck
+@[default_target] lean_lib LtStatefulCoreCheck
+@[default_target] lean_lib LtStatefulEffectCheck
+@[default_target] lean_lib LtStatefulOptimizerCheck
+@[default_target] lean_lib LtStatefulPurityCheck
+@[default_target] lean_lib LtStatefulOptimizerHostile
+@[default_target] lean_lib LtStatefulPurityOff
+@[default_target] lean_lib LtStatefulPurityOn
+
 @[default_target] lean_lib Adt
 @[default_target] lean_lib AdtBorrows
 @[default_target] lean_lib ArraySliceIndex
@@ -72,6 +81,22 @@ package «tests» {}
 @[default_target] lean_lib LoopsNestedRec
 @[default_target] lean_lib LoopsRec
 @[default_target] lean_lib LoopsSequences
+@[default_target] lean_lib LtStatefulArc
+@[default_target] lean_lib LtStatefulConcurrency
+@[default_target] lean_lib LtStatefulControl
+@[default_target] lean_lib LtStatefulCore
+@[default_target] lean_lib LtStatefulClistClient
+@[default_target] lean_lib LtStatefulDrop
+@[default_target] lean_lib LtStatefulFailures
+@[default_target] lean_lib LtStatefulLoops
+@[default_target] lean_lib LtStatefulMiniThemisClient
+@[default_target] lean_lib LtStatefulNegative
+@[default_target] lean_lib LtStatefulPasses
+@[default_target] lean_lib LtStatefulReborrows
+@[default_target] lean_lib LtStatefulReturns
+@[default_target] lean_lib LtStatefulSignatures
+@[default_target] lean_lib LtStatefulTemporaries
+@[default_target] lean_lib LtStatefulWrappers
 @[default_target] lean_lib MiniTree
 @[default_target] lean_lib MultiTarget
 @[default_target] lean_lib MutBorrowInSharedBorrow

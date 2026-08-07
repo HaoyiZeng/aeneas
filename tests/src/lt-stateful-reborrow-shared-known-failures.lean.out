@@ -1,0 +1,5 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_reborrow_shared_known_failures.llbc
+[[91mError[39m] Unimplemented binary operation
+Source: 'tests/src/lt-stateful-reborrow-shared-known-failures.rs', lines 55:24-55:33
+Compiler source: interp/InterpExpressions.ml, line 1153
+

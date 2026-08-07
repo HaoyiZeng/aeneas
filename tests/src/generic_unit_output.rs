@@ -19,3 +19,13 @@ fn call_with_unit(mut n: u32) -> u32 {
     let _ = set_and_return(&mut n, 2, ());
     n
 }
+
+fn touch_unit(value: &mut ()) {
+    *value = ();
+}
+
+fn call_touch_unit() {
+    let mut value = ();
+    touch_unit(&mut value);
+    let _copy = value;
+}

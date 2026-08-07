@@ -1,0 +1,5 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_loop_replace_known_failures.llbc
+[[91mError[39m] Unimplemented
+Source: 'tests/src/lt-stateful-loop-replace-known-failures.rs', lines 1:0-62:5
+Compiler source: interp/InterpMatchCtxs.ml, line 1330
+

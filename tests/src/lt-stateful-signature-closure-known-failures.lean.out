@@ -1,0 +1,5 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_signature_closure_known_failures.llbc
+[[91mError[39m] Can't end abstraction 3 as it is set as non-endable
+Source: 'tests/src/lt-stateful-signature-closure-known-failures.rs', lines 44:31-44:52
+Compiler source: interp/InterpBorrows.ml, line 1203
+

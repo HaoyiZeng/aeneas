@@ -1,0 +1,5 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_misc_known_failures.llbc
+[[91mError[39m] Unexpected erased region
+Source: 'tests/src/lt-stateful-misc-known-failures.rs', lines 25:0-27:1
+Compiler source: symbolic/SymbolicToPureTypes.ml, line 850
+

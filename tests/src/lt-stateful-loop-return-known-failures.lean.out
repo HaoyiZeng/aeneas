@@ -1,0 +1,5 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_loop_return_known_failures.llbc
+[[91mError[39m] Not implemented
+Source: 'tests/src/lt-stateful-loop-return-known-failures.rs', lines 41:16-47:5
+Compiler source: interp/InterpJoin.ml, line 1311
+

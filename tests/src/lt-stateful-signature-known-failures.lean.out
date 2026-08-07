@@ -1,0 +1,5 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_signature_known_failures.llbc
+[[91mError[39m] Internal error, please file an issue
+Source: 'tests/src/lt-stateful-signature-known-failures.rs', lines 46:0-54:1
+Compiler source: llbc/RegionsHierarchy.ml, line 231
+

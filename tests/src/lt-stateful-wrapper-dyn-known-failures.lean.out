@@ -1,0 +1,5 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_wrapper_dyn_known_failures.llbc
+[[91mError[39m] Function pointers are not supported yet
+Source: 'tests/src/lt-stateful-wrapper-dyn-known-failures.rs', lines 26:4-26:27
+Compiler source: interp/InterpStatements.ml, line 1445
+

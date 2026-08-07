@@ -1,0 +1,5 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_labelled_return_known_failures.llbc
+[[91mError[39m] Returns inside of nested loops are not supported yet
+Source: 'tests/src/lt-stateful-labelled-return-known-failures.rs', lines 41:0-58:1
+Compiler source: PrePasses.ml, line 658
+

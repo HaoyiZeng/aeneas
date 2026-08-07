@@ -1,0 +1,5 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_wrapper_closure_known_failures.llbc
+[[91mError[39m] Internal error, please file an issue
+Source: 'tests/src/lt-stateful-wrapper-closure-known-failures.rs', lines 60:0-67:1
+Compiler source: interp/InterpProjectors.ml, line 544
+

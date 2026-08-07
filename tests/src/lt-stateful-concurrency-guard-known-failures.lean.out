@@ -1,0 +1,5 @@
+[[92mInfo[39m ] Imported: tests/llbc/lt_stateful_concurrency_guard_known_failures.llbc
+[[91mError[39m] Can't end abstraction 4 as it is set as non-endable
+Source: 'tests/src/lt-stateful-concurrency-guard-known-failures.rs', lines 63:23-63:37
+Compiler source: interp/InterpBorrows.ml, line 1203
+
