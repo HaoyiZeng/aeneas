@@ -21,6 +21,9 @@ type fun_info = {
   can_fail : bool;
       (* Not used yet: all the extracted functions use an error monad *)
   stateful : bool;
+      (** [true] if the function transitively calls a function whose signature
+          declares a stateful lifetime. *)
+  has_stateful_regions : bool;
   can_diverge : bool;
   (* The function can diverge if:
      - it is recursive
@@ -67,16 +70,28 @@ let analyze_module (m : crate) (funs_map : fun_decl FunDeclId.Map.t) :
     register_info (FunOrMethodId.Fun id) info
   in
   let register_trait_method_info (trait_decl_id : TraitDeclId.id)
-      (method_id : Types.TraitMethodId.id) : unit =
+      (method_id : Types.TraitMethodId.id) (method_ : trait_method Types.binder)
+      : unit =
+    let stateful =
+      List.exists
+        (fun (region : Types.region_param) -> region.stateful)
+        method_.binder_params.regions
+    in
     register_info
       (FunOrMethodId.Method (trait_decl_id, method_id))
-      { can_fail = true; stateful = false; can_diverge = false; is_rec = false }
+      {
+        can_fail = true;
+        stateful = false;
+        has_stateful_regions = stateful;
+        can_diverge = false;
+        is_rec = false;
+      }
   in
 
   TraitDeclId.Map.iter
     (fun trait_decl_id (trait_decl : trait_decl) ->
       Types.TraitMethodId.Map.iter
-        (fun method_id _ -> register_trait_method_info trait_decl_id method_id)
+        (register_trait_method_info trait_decl_id)
         trait_decl.methods)
     m.trait_decls;
 
@@ -93,6 +108,14 @@ let analyze_module (m : crate) (funs_map : fun_decl FunDeclId.Map.t) :
       fun_info =
     let can_fail = ref false in
     let stateful = ref false in
+    let has_stateful_regions =
+      List.exists
+        (fun (fun_decl : fun_decl) ->
+          List.exists
+            (fun (region : Types.region_param) -> region.stateful)
+            fun_decl.generics.regions)
+        d
+    in
     let can_diverge = ref false in
     let is_rec = ref false in
     let group_has_builtin_info = ref false in
@@ -137,7 +160,8 @@ let analyze_module (m : crate) (funs_map : fun_decl FunDeclId.Map.t) :
                    use of --exclude)"
               in
               self#may_fail info.can_fail;
-              stateful := !stateful || info.stateful;
+              stateful :=
+                !stateful || info.stateful || info.has_stateful_regions;
               can_diverge := !can_diverge || info.can_diverge
 
           method! visit_Assert env a =
@@ -257,6 +281,7 @@ let analyze_module (m : crate) (funs_map : fun_decl FunDeclId.Map.t) :
     {
       can_fail = !can_fail;
       stateful = !stateful;
+      has_stateful_regions;
       can_diverge = !can_diverge;
       is_rec = !is_rec;
     }

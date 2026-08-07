@@ -748,7 +748,7 @@ let adt_pat_to_string ?(span : Meta.span option) (env : fmt_env)
   snd (adt_pat_to_string_aux span env variant_id fields ty)
 
 let back_sg_info_to_string (env : fmt_env) (info : back_sg_info) : string =
-  let { inputs; outputs; effect_info; filter } = info in
+  let { inputs; outputs; effect_info; stateful; filter } = info in
   let ty_to_string (n, ty) =
     (match n with
     | None -> ""
@@ -766,6 +766,8 @@ let back_sg_info_to_string (env : fmt_env) (info : back_sg_info) : string =
   ^ Print.list_to_string tys_to_string outputs
   ^ "; effect_info = "
   ^ show_fun_effect_info effect_info
+  ^ "; stateful = "
+  ^ Print.bool_to_string stateful
   ^ "; filter = "
   ^ Print.bool_to_string filter
   ^ " }"

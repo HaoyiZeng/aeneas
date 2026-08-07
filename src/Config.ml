@@ -367,6 +367,10 @@ let intro_massert = ref true
     ]} *)
 let simplify_merged_fwd_backs = ref true
 
+(** Interpret Charon's [verify::stateful_lifetimes] metadata and make the
+    selected backward functions effectful. *)
+let stateful_lifetimes = ref false
+
 (** Use short names for the record fields.
 
     Some backends can't disambiguate records when their field names have

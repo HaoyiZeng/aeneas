@@ -1590,6 +1590,9 @@ and emeta =
 (** Information about the "effect" of a function *)
 type fun_effect_info = {
   can_fail : bool;  (** [true] if the return type is a [result] *)
+  effectful : bool;
+      (** [true] if evaluating the function performs an effect even when it
+          cannot fail. This is orthogonal to [can_fail]. *)
   can_diverge : bool;
       (** [true] if the function can diverge (i.e., not terminate). It happens
           if the function is recursive or contains a loop but also if it
@@ -1599,6 +1602,9 @@ type fun_effect_info = {
       *)
 }
 [@@deriving show]
+
+let fun_effect_is_monadic (info : fun_effect_info) : bool =
+  info.can_fail || info.effectful
 
 (** Meta information about a function signature *)
 type fun_sig_info = {
@@ -1633,6 +1639,9 @@ type back_sg_info = {
           - [result T]
           - [[result (T * T)]] *)
   effect_info : fun_effect_info;
+  stateful : bool;
+      (** If [true], the backward function value itself lives in [Result]. This
+          is distinct from effects performed by its body. *)
   filter : bool;  (** Should we filter this backward function? *)
 }
 [@@deriving show]

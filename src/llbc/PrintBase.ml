@@ -819,9 +819,10 @@ module Values = struct
 
   let abs_kind_to_string (kind : abs_kind) : string =
     match kind with
-    | FunCall (fid, rg_id) ->
+    | FunCall (fid, rg_id, stateful) ->
         "FunCall(fid:" ^ FunCallId.to_string fid ^ ", rg_id:"
         ^ RegionGroupId.to_string rg_id
+        ^ (if stateful then ", stateful" else "")
         ^ ")"
     | SynthInput rg_id ->
         "SynthInput(rg_id:" ^ RegionGroupId.to_string rg_id ^ ")"

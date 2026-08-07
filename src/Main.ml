@@ -93,6 +93,10 @@ let () =
       ( "-borrow-check",
         Arg.Set borrow_check,
         " Only borrow-check the program and do not generate any translation" );
+      ( "-stateful-lifetimes",
+        Arg.Set stateful_lifetimes,
+        " Make backward functions for `verify::stateful_lifetimes` regions \
+         effectful" );
       ( "-backend",
         Arg.Symbol (backend_names, set_backend),
         " Specify the target backend (" ^ String.concat ", " backend_names ^ ")"
@@ -519,7 +523,8 @@ let () =
                prefixed with the type name to prevent collisions *)
             variant_concatenate_type_name := false;
             (* *) merge_let_app_decompose_tuple := true;
-            lift_pure_function_calls := true
+            lift_pure_function_calls := true;
+            if !stateful_lifetimes then decompose_monadic_let_bindings := true
         | HOL4 ->
             (* We don't support fuel for the HOL4 backend *)
             if !use_fuel then (

@@ -45,7 +45,12 @@ module Sig = struct
 
   (** Region 'a of id 0 *)
   let region_param_0 : region_param =
-    { index = rvar_id_0; name = Some "'a"; mutability = LtUnknown }
+    {
+      index = rvar_id_0;
+      name = Some "'a";
+      mutability = LtUnknown;
+      stateful = false;
+    }
 
   (** Region group: [{ parent={}; regions:{'a of id 0} }] *)
   let region_group_0 : region_var_group =
