@@ -227,6 +227,8 @@ let translate_function_to_pure_aux (trans_ctx : trans_ctx)
       var_id_to_default = Pure.FVarId.Map.empty;
       abs_id_to_info = AbsId.Map.empty;
       ignored_abs_ids = AbsId.Set.empty;
+      stateful_roots = SymbolicValueId.Map.empty;
+      pending_stateful_values = SymbolicValueId.Map.empty;
       meta_symb_places = SymbolicToPureCore.MetaSymbPlaceSet.empty;
     }
   in
@@ -545,7 +547,7 @@ let translate_crate_to_pure (crate : crate) (marked_ids : marked_ids) :
     ProgressBar.with_reporter num_decls "Translated trait declarations: "
       (fun report ->
         List.filter_map
-          (fun d ->
+          (fun (d : LlbcAst.trait_decl) ->
             try
               let d = SymbolicToPure.translate_trait_decl trans_ctx d in
               report 1;
@@ -573,33 +575,116 @@ let translate_crate_to_pure (crate : crate) (marked_ids : marked_ids) :
 
   (* Translate the trait implementations *)
   let trait_impls =
+    let stateful_compatible (d : LlbcAst.trait_impl) =
+      if not !Config.stateful_lifetimes then true
+      else
+        let trait_decl =
+          TraitDeclId.Map.find d.impl_trait.id trans_ctx.trait_decls_to_extract
+        in
+        let allowed_impl_regions =
+          List.fold_left
+            (fun allowed (region : region_param) ->
+              if not region.stateful then allowed
+              else
+                match
+                  RegionId.nth d.impl_trait.generics.regions region.index
+                with
+                | RVar (Free id) -> RegionId.Set.add id allowed
+                | RVar (Bound _) | RStatic | RBody _ | RErased -> allowed)
+            RegionId.Set.empty trait_decl.generics.regions
+        in
+        let impl_regions_compatible =
+          List.for_all
+            (fun (region : region_param) ->
+              (not region.stateful)
+              || RegionId.Set.mem region.index allowed_impl_regions)
+            d.generics.regions
+        in
+        let methods_compatible =
+          List.for_all
+            (fun ((method_id, method_ref) :
+                   TraitMethodId.id * fun_decl_ref Types.binder) ->
+              let trait_method =
+                TraitMethodId.Map.find method_id trait_decl.methods
+              in
+              List.map
+                (fun (region : region_param) -> region.stateful)
+                method_ref.binder_params.regions
+              = List.map
+                  (fun (region : region_param) -> region.stateful)
+                  trait_method.binder_params.regions)
+            (TraitMethodId.Map.to_list d.methods)
+        in
+        impl_regions_compatible && methods_compatible
+    in
+    let has_stateful_metadata (d : LlbcAst.trait_impl) =
+      let trait_decl =
+        TraitDeclId.Map.find d.impl_trait.id trans_ctx.trait_decls_to_extract
+      in
+      List.exists
+        (fun (region : region_param) -> region.stateful)
+        d.generics.regions
+      || List.exists
+           (fun (region : region_param) -> region.stateful)
+           trait_decl.generics.regions
+      || List.exists
+           (fun ((_method_id, method_ref) :
+                  TraitMethodId.id * fun_decl_ref Types.binder) ->
+             List.exists
+               (fun (region : region_param) -> region.stateful)
+               method_ref.binder_params.regions)
+           (TraitMethodId.Map.to_list d.methods)
+      || List.exists
+           (fun method_ref ->
+             List.exists
+               (fun (region : region_param) -> region.stateful)
+               method_ref.binder_params.regions)
+           (TraitMethodId.Map.values trait_decl.methods)
+    in
     let num_decls = TraitImplId.Map.cardinal crate.trait_impls in
     ProgressBar.with_reporter num_decls "Translated trait impls: "
       (fun report ->
         List.filter_map
-          (fun d ->
-            try
-              let d = SymbolicToPure.translate_trait_impl trans_ctx d in
-              report 1;
-              Some d
-            with CFailure error ->
+          (fun (d : LlbcAst.trait_impl) ->
+            if !Config.stateful_lifetimes && has_stateful_metadata d then (
               let name = name_to_string trans_ctx d.item_meta.name in
-              let name_pattern =
-                try
-                  name_to_pattern_string (Some d.item_meta.span) trans_ctx
-                    d.item_meta.name
-                with CFailure _ ->
-                  "(could not compute the name pattern due to a different \
-                   error)"
+              let reason =
+                if stateful_compatible d then
+                  "Generic trait instances with stateful methods are not yet \
+                   supported"
+                else
+                  "The stateful lifetime metadata is incompatible with the \
+                   trait declaration"
               in
-              [%warn_opt_span] error.span
-                ("Could not translate the trait instance '" ^ name
-               ^ " because of previous error\nName pattern: '" ^ name_pattern
-               ^ "'" ^ "\nDefinition span: "
-                ^ Errors.raw_span_to_string d.item_meta.span
-                ^ compute_local_uses_error_message trans_ctx
-                    (IdTraitImpl d.def_id));
+              [%warn_opt_span] (Some d.item_meta.span)
+                (reason ^ " for trait instance '" ^ name
+               ^ "'. The generic trait instance is omitted; statically \
+                  resolved concrete method calls remain available.");
+              report 1;
               None)
+            else
+              try
+                let d = SymbolicToPure.translate_trait_impl trans_ctx d in
+                report 1;
+                Some d
+              with CFailure error ->
+                let name = name_to_string trans_ctx d.item_meta.name in
+                let name_pattern =
+                  try
+                    name_to_pattern_string (Some d.item_meta.span) trans_ctx
+                      d.item_meta.name
+                  with CFailure _ ->
+                    "(could not compute the name pattern due to a different \
+                     error)"
+                in
+                [%warn_opt_span] error.span
+                  ("Could not translate the trait instance '" ^ name
+                 ^ " because of previous error\nName pattern: '" ^ name_pattern
+                 ^ "'" ^ "\nDefinition span: "
+                  ^ Errors.raw_span_to_string d.item_meta.span
+                  ^ compute_local_uses_error_message trans_ctx
+                      (IdTraitImpl d.def_id));
+                None)
           (TraitImplId.Map.values trans_ctx.trait_impls_to_extract))
   in
 
@@ -1107,13 +1192,13 @@ let export_trait_impl (fmt : Format.formatter) (_config : gen_config)
     (ctx : gen_ctx) ~(is_rec : bool) (trait_impl_id : Pure.trait_impl_id) : unit
     =
   (* Lookup the definition *)
-  let trait_impl =
-    [%silent_unwrap_opt_span] None
-      (TraitImplId.Map.find_opt trait_impl_id ctx.trans_trait_impls)
-  in
-  if not (trait_impl_is_builtin ctx trait_impl_id) then (
-    Extract.extract_trait_impl ctx fmt ~is_rec trait_impl;
-    EmitJson.record_trait_impl_if_enabled ctx trait_impl)
+  match TraitImplId.Map.find_opt trait_impl_id ctx.trans_trait_impls with
+  | None when !Config.stateful_lifetimes -> ()
+  | None -> [%internal_error_opt_span] None
+  | Some trait_impl ->
+      if not (trait_impl_is_builtin ctx trait_impl_id) then (
+        Extract.extract_trait_impl ctx fmt ~is_rec trait_impl;
+        EmitJson.record_trait_impl_if_enabled ctx trait_impl)
 
 (** A generic utility to generate the extracted definitions: as we may want to
     split the definitions between different files (or not), we can control what
