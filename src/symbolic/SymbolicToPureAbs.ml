@@ -230,10 +230,52 @@ let abs_to_input_output_tys (ctx : bs_ctx) (abs : V.abs) : ty list * ty list =
 
     TODO: the result is incorrect if the loans have been partially ended (in
     particular, inside ADTs). *)
+let abs_cont_is_monadic (ctx : bs_ctx) (abs : V.abs) : bool =
+  match abs.cont with
+  | None -> false
+  | Some cont ->
+      let monadic = ref false in
+      let visitor =
+        object
+          inherit [_] V.iter_tevalue as super
+
+          method! visit_EApp env f args =
+            let is_monadic =
+              match f with
+              | V.EFunCall abs_id | V.ELoop (abs_id, _) | V.EJoin abs_id -> (
+                  match V.AbsId.Map.find_opt abs_id ctx.abs_id_to_info with
+                  | Some info -> info.stateful || info.can_fail
+                  | None ->
+                      (* The abstraction is not registered yet. This happens for
+                         a join or a loop, whose continuation is typed *before*
+                         the branches that create the abstractions it refers to
+                         are translated, so we cannot decide here.
+
+                         We fall back on whether the function being translated
+                         performs stateful effects at all. This is a per
+                         function over-approximation: it keeps the continuation
+                         pure in every function that carries no stateful
+                         lifetime, which is what makes [-stateful-lifetimes]
+                         inert on unannotated code (see
+                         [LtStatefulPurityCheck]). *)
+                      ctx.sg.fun_ty.fwd_info.effect_info.effectful)
+              | V.EOutputAbs _ | V.EInputAbs _ -> false
+            in
+            if is_monadic then monadic := true;
+            super#visit_EApp env f args
+        end
+      in
+      Option.iter (visitor#visit_tevalue ()) cont.input;
+      !monadic
+
 let abs_to_ty (ctx : bs_ctx) (abs : V.abs) : ty option =
   let inputs, outputs = abs_to_input_output_tys ctx abs in
+  let monadic = abs_cont_is_monadic ctx abs in
   if inputs = [] && outputs = [] then None
-  else Some (mk_arrows inputs (mk_simpl_tuple_ty outputs))
+  else
+    let output = mk_simpl_tuple_ty outputs in
+    let output = if monadic then mk_result_ty output else output in
+    Some (mk_arrows inputs output)
 
 let compute_tevalue_proj_kind (span : Meta.span) (type_infos : type_infos)
     (abs_regions : T.RegionId.Set.t) (abs_level : abs_level)
@@ -662,7 +704,9 @@ let einput_to_texpr (ctx : bs_ctx) (ectx : C.eval_ctx) (rids : T.RegionId.Set.t)
             mk_result_ok_texpr span next
           else next
         in
-        let e = [%add_loc] mk_closed_checked_let ctx false pat bound next in
+        let e =
+          [%add_loc] mk_closed_checked_let ctx bound_can_fail pat bound next
+        in
         let can_fail = bound_can_fail || next_can_fail in
         (ctx, can_fail, Some e)
     | V.EJoinMarkers _ | V.EBVar _ ->
@@ -708,7 +752,7 @@ let einput_to_texpr (ctx : bs_ctx) (ectx : C.eval_ctx) (rids : T.RegionId.Set.t)
               [%internal_error] span
           | V.EFunCall abs_id | V.ELoop (abs_id, _) | V.EJoin abs_id ->
               (* Lookup the variable introduced for the backward function *)
-              let e, can_fail =
+              let ctx, e, can_fail =
                 match V.AbsId.Map.find_opt abs_id ctx.abs_id_to_info with
                 | None ->
                     (* No variable was introduced: it means the abstraction should
@@ -716,8 +760,8 @@ let einput_to_texpr (ctx : bs_ctx) (ectx : C.eval_ctx) (rids : T.RegionId.Set.t)
                     [%sanity_check] span (args = [ [] ]);
                     [%sanity_check] span
                       (V.AbsId.Set.mem abs_id ctx.ignored_abs_ids);
-                    (None, false)
-                | Some { fvar; can_fail } ->
+                    (ctx, None, false)
+                | Some { fvar; can_fail; stateful = _; _ } ->
                     (* The list of lists of arguments is only used in the presence
                      of nested borrows with function applications *)
                     let args =
@@ -737,7 +781,11 @@ let einput_to_texpr (ctx : bs_ctx) (ectx : C.eval_ctx) (rids : T.RegionId.Set.t)
                           args
                       | _ -> [%internal_error] span
                     in
-                    (Some ([%add_loc] mk_apps span fvar args), can_fail)
+                    (* A stateful backward value is an ordinary effectful
+                       function [A -> Result B]: applying it is the effect, so
+                       it needs no special handling here. Its [can_fail] is
+                       already [true] via [fun_effect_is_monadic]. *)
+                    (ctx, Some ([%add_loc] mk_apps span fvar args), can_fail)
               in
               (ctx, can_fail, e)
         end
@@ -1066,7 +1114,6 @@ let abs_cont_to_texpr_aux (ctx : bs_ctx) (ectx : C.eval_ctx) (abs : V.abs)
     einput_to_texpr ctx ectx abs.regions.owned bound_inputs fvar_to_texpr
       abs_level input
   in
-  [%sanity_check] span (not can_fail);
   let ctx, bound_outputs, pat =
     eoutput_to_pat ctx fvar_to_texpr abs.regions.owned abs_level output
   in
@@ -1079,8 +1126,17 @@ let abs_cont_to_texpr_aux (ctx : bs_ctx) (ectx : C.eval_ctx) (abs : V.abs)
 
   if inputs = [] && outputs = [] then None
   else
-    (* Put everything together *)
+    (* Put everything together.
+
+       The result must be [Result]-wrapped exactly when [abs_to_ty] says the
+       continuation is monadic, otherwise the body and its declared type
+       diverge. We therefore consult the same predicate rather than recomputing
+       one from [can_fail]. *)
+    let monadic = abs_cont_is_monadic ctx abs || can_fail in
     let output_e = mk_simpl_tuple_texpr span outputs in
+    let output_e =
+      if monadic then mk_result_ok_texpr span output_e else output_e
+    in
     let e =
       mk_closed_checked_let __FILE__ __LINE__ ctx can_fail pat input_e output_e
     in
@@ -1261,7 +1317,6 @@ let ended_abs_cont_to_texpr_aux (ctx : bs_ctx) (ectx : C.eval_ctx) (abs : V.abs)
     einput_to_texpr ctx ectx abs.regions.owned empty_bound_borrows_loans
       fvar_to_texpr abs_level input
   in
-  [%sanity_check] span (not can_fail);
   let ctx, pat =
     tevalue_to_given_back abs.regions.owned abs_level None output ctx
   in

@@ -18,10 +18,214 @@ let translate_fn_ptr_kind (ctx : bs_ctx) (id : A.fn_ptr_kind) : fn_ptr_kind =
       in
       TraitMethod (trait_ref, method_id)
 
+let match_continuation_inputs (ctx : bs_ctx) (absl : V.abs list)
+    (fvars : (V.abs_id * fvar) list) (values : V.symbolic_value list) :
+    V.symbolic_value option list =
+  let inputs =
+    List.map
+      (fun (_, (fvar : fvar)) ->
+        match fst (destruct_arrows fvar.ty) with
+        | [ input_ty ] -> Some input_ty
+        | _ -> None)
+      fvars
+  in
+  let matched = Array.make (List.length fvars) None in
+  let used = ref V.SymbolicValueId.Set.empty in
+  List.iteri
+    (fun i ((aid, _), input) ->
+      match input with
+      | None -> ()
+      | Some input_ty -> (
+          let abs = List.find (fun (abs : V.abs) -> abs.abs_id = aid) absl in
+          let ids, _ = compute_abs_ids abs in
+          let candidates =
+            List.filter
+              (fun (sv : V.symbolic_value) ->
+                V.SymbolicValueId.Set.mem sv.sv_id ids.sids
+                && translate_fwd_ty (Some ctx.span) ctx.decls_ctx sv.sv_ty
+                   = input_ty)
+              values
+          in
+          match candidates with
+          | [ sv ] ->
+              matched.(i) <- Some sv;
+              used := V.SymbolicValueId.Set.add sv.sv_id !used
+          | _ -> ()))
+    (List.combine fvars inputs);
+  let processed = ref [] in
+  List.iteri
+    (fun _ input ->
+      match input with
+      | None -> ()
+      | Some input_ty when List.exists (fun ty -> ty = input_ty) !processed ->
+          ()
+      | Some input_ty ->
+          processed := input_ty :: !processed;
+          let indices =
+            List.filter_map
+              (fun (i, ty) ->
+                if ty = Some input_ty && matched.(i) = None then Some i
+                else None)
+              (List.mapi (fun i ty -> (i, ty)) inputs)
+          in
+          let candidates =
+            List.filter
+              (fun (sv : V.symbolic_value) ->
+                (not (V.SymbolicValueId.Set.mem sv.sv_id !used))
+                && translate_fwd_ty (Some ctx.span) ctx.decls_ctx sv.sv_ty
+                   = input_ty)
+              values
+          in
+          if List.length indices = List.length candidates then
+            List.iter2
+              (fun i sv ->
+                matched.(i) <- Some sv;
+                used := V.SymbolicValueId.Set.add sv.sv_id !used)
+              indices candidates)
+    inputs;
+  Array.to_list matched
+
+let stateful_root_of_tvalue (ctx : bs_ctx) (value : V.tvalue) :
+    V.symbolic_value_id option =
+  let ids, _ = compute_tvalue_ids value in
+  let roots =
+    V.SymbolicValueId.Set.fold
+      (fun sid roots ->
+        match V.SymbolicValueId.Map.find_opt sid ctx.stateful_roots with
+        | Some root -> V.SymbolicValueId.Set.add root roots
+        | None -> roots)
+      ids.sids V.SymbolicValueId.Set.empty
+  in
+  match V.SymbolicValueId.Set.elements roots with
+  | [ root ] -> Some root
+  | _ -> None
+
+let stateful_root_of_abs (ctx : bs_ctx) (abs : V.abs) :
+    V.symbolic_value_id option =
+  let roots = ref V.SymbolicValueId.Set.empty in
+  let visitor =
+    object
+      inherit [_] V.iter_tevalue as super
+
+      method! visit_EApp env f args =
+        let abs_id =
+          match f with
+          | V.EFunCall abs_id | V.ELoop (abs_id, _) | V.EJoin abs_id ->
+              Some abs_id
+          | V.EOutputAbs _ | V.EInputAbs _ -> None
+        in
+        Option.iter
+          (fun abs_id ->
+            match V.AbsId.Map.find_opt abs_id ctx.abs_id_to_info with
+            | Some { stateful_root = Some root; _ } ->
+                roots := V.SymbolicValueId.Set.add root !roots
+            | Some _ | None -> ())
+          abs_id;
+        super#visit_EApp env f args
+    end
+  in
+  Option.iter
+    (fun (cont : V.abs_cont) ->
+      Option.iter (visitor#visit_tevalue ()) cont.input)
+    abs.cont;
+  match V.SymbolicValueId.Set.elements !roots with
+  | [ root ] -> Some root
+  | _ -> (
+      let ids, _ = compute_abs_ids abs in
+      let roots =
+        V.SymbolicValueId.Set.fold
+          (fun sid roots ->
+            match V.SymbolicValueId.Map.find_opt sid ctx.stateful_roots with
+            | Some root -> V.SymbolicValueId.Set.add root roots
+            | None -> roots)
+          ids.sids V.SymbolicValueId.Set.empty
+      in
+      match V.SymbolicValueId.Set.elements roots with
+      | [ root ] -> Some root
+      | _ -> None)
+
+let register_stateful_output_values ?(root_hints = []) (ctx : bs_ctx)
+    (values : V.symbolic_value list) (fvars : fvar list) : bs_ctx =
+  let add ctx (sv : V.symbolic_value) (fvar : fvar) root =
+    {
+      ctx with
+      stateful_roots =
+        V.SymbolicValueId.Map.add sv.sv_id root ctx.stateful_roots;
+      pending_stateful_values =
+        V.SymbolicValueId.Map.add root (mk_texpr_from_fvar fvar)
+          ctx.pending_stateful_values;
+    }
+  in
+  let source_roots (ctx : bs_ctx) (fvar : fvar) matching_name =
+    V.SymbolicValueId.Map.fold
+      (fun source_id root roots ->
+        match V.SymbolicValueId.Map.find_opt source_id ctx.sv_to_var with
+        | Some source
+          when source.ty = fvar.ty
+               && ((not matching_name)
+                  || (fvar.basename <> None && source.basename = fvar.basename)
+                  ) -> V.SymbolicValueId.Set.add root roots
+        | Some _ | None -> roots)
+      ctx.stateful_roots V.SymbolicValueId.Set.empty
+  in
+  let hints =
+    if root_hints = [] then List.map (fun _ -> None) values else root_hints
+  in
+  let entries = List.combine values (List.combine fvars hints) in
+  let ctx, assigned, unresolved =
+    List.fold_left
+      (fun (ctx, assigned, unresolved) (sv, (fvar, hint)) ->
+        let root =
+          match hint with
+          | Some root -> Some root
+          | None -> (
+              match
+                V.SymbolicValueId.Set.elements (source_roots ctx fvar true)
+              with
+              | [ root ] -> Some root
+              | _ -> None)
+        in
+        match root with
+        | Some root ->
+            ( add ctx sv fvar root,
+              V.SymbolicValueId.Set.add root assigned,
+              unresolved )
+        | None -> (ctx, assigned, (sv, fvar) :: unresolved))
+      (ctx, V.SymbolicValueId.Set.empty, [])
+      entries
+  in
+  let unresolved = List.rev unresolved in
+  let rec assign_groups ctx remaining =
+    match remaining with
+    | [] -> ctx
+    | (_, (first_fvar : fvar)) :: _ ->
+        let same_ty, others =
+          List.partition
+            (fun (_, (fvar : fvar)) -> fvar.ty = first_fvar.ty)
+            remaining
+        in
+        let roots =
+          V.SymbolicValueId.Set.diff
+            (source_roots ctx first_fvar false)
+            assigned
+          |> V.SymbolicValueId.Set.elements
+        in
+        let ctx =
+          if List.length same_ty = List.length roots then
+            List.fold_left2
+              (fun ctx (sv, fvar) root -> add ctx sv fvar root)
+              ctx same_ty roots
+          else ctx
+        in
+        assign_groups ctx others
+  in
+  assign_groups ctx unresolved
+
 (* Introduce variables for the backward functions.
 
    We may filter the region group ids. *)
-let fresh_back_vars_for_current_fun (ctx : bs_ctx) : bs_ctx * fvar option list =
+let fresh_back_vars_for_current_fun ?(evaluate_backs = []) (ctx : bs_ctx) :
+    bs_ctx * fvar option list =
   (* We lookup the LLBC definition in an attempt to derive pretty names
      for the backward functions. *)
   let back_var_names =
@@ -52,9 +256,18 @@ let fresh_back_vars_for_current_fun (ctx : bs_ctx) : bs_ctx * fvar option list =
         Some name)
       (RegionGroupId.Map.bindings ctx.sg.fun_ty.back_sg)
   in
-  let back_vars =
-    List.combine back_var_names (compute_back_tys ctx.sg.fun_ty)
+  let back_tys = compute_back_tys ctx.sg.fun_ty in
+  let evaluate_backs =
+    if evaluate_backs = [] then List.map (fun _ -> false) back_tys
+    else evaluate_backs
   in
+  let back_tys =
+    List.map2
+      (fun evaluate ty ->
+        if evaluate then Option.map (unwrap_result_ty ctx.span) ty else ty)
+      evaluate_backs back_tys
+  in
+  let back_vars = List.combine back_var_names back_tys in
   let back_vars =
     List.map
       (fun (name, ty) ->
@@ -344,6 +557,7 @@ and translate_function_call (call : S.call) (e : S.expr) (ctx : bs_ctx) : texpr
 (** Handle the function call cases which are not unsized casts *)
 and translate_function_call_aux (call : S.call) (e : S.expr) (ctx : bs_ctx) :
     texpr =
+  let eager_stateful_backs = ref [] in
   (* Register the consumed mutable borrows to compute default values *)
   let ctx =
     List.fold_left (register_consumed_mut_borrows call.ctx) ctx call.args
@@ -383,11 +597,70 @@ and translate_function_call_aux (call : S.call) (e : S.expr) (ctx : bs_ctx) :
           let inst_sg = Option.get call.inst_sg in
           let decls_ctx = ctx.decls_ctx in
           let dsg =
+            let is_stateful_group =
+              match fid_t with
+              | FunId (FBuiltin _) -> fun _ -> false
+              | TraitMethod _ | FunId (FRegular _) ->
+                  let signature =
+                    [%silent_unwrap_opt_span] (Some ctx.span)
+                      (lookup_pure_fn_ptr_sig ctx fid_t)
+                  in
+                  fun gid ->
+                    Option.value
+                      (Option.map
+                         (fun (info : back_sg_info) -> info.stateful)
+                         (RegionGroupId.Map.find_opt gid
+                            signature.dsg.fun_ty.back_sg))
+                      ~default:false
+            in
             translate_inst_fun_sig_to_decomposed_fun_type (Some ctx.span)
-              decls_ctx fid_t inst_sg sg.output
+              decls_ctx fid_t inst_sg is_stateful_group sg.output
               (List.map (fun _ -> None) sg.inputs)
           in
-          let back_tys = compute_back_tys_with_info dsg in
+          let back_tys =
+            List.map
+              (function
+                | Some ((back_sg : back_sg_info), ty)
+                  when back_sg_is_evaluated back_sg ->
+                    if back_sg.outputs = [] then None
+                    else Some (back_sg, unwrap_result_ty ctx.span ty)
+                | back_ty -> back_ty)
+              (compute_back_tys_with_info dsg)
+          in
+          let has_stateful_back =
+            List.exists
+              (function
+                | Some ((back_sg : back_sg_info), _) -> back_sg.stateful
+                | None -> false)
+              back_tys
+          in
+          let ctx, stateful_root =
+            if not has_stateful_back then (ctx, None)
+            else
+              let ids, _ = compute_tvalues_ids call.args in
+              let roots =
+                V.SymbolicValueId.Set.fold
+                  (fun sid roots ->
+                    match
+                      V.SymbolicValueId.Map.find_opt sid ctx.stateful_roots
+                    with
+                    | Some root -> V.SymbolicValueId.Set.add root roots
+                    | None -> roots)
+                  ids.sids V.SymbolicValueId.Set.empty
+              in
+              let root =
+                match V.SymbolicValueId.Set.elements roots with
+                | [ root ] -> root
+                | _ -> call.dest.sv_id
+              in
+              ( {
+                  ctx with
+                  stateful_roots =
+                    V.SymbolicValueId.Map.add call.dest.sv_id root
+                      ctx.stateful_roots;
+                },
+                Some root )
+          in
           [%ltrace
             "back_tys:\n "
             ^ String.concat "\n"
@@ -462,17 +735,46 @@ and translate_function_call_aux (call : S.call) (e : S.expr) (ctx : bs_ctx) :
 
           (* Update the information about the backward functions *)
           let ctx =
-            let backs, ignored =
+            let entries =
+              List.combine call.abstractions (List.combine back_vars back_tys)
+            in
+            let eager, entries =
               List.partition
-                (fun (_, v) -> Option.is_some v)
-                (List.combine call.abstractions back_vars)
+                (fun (_, (fv, back_ty)) ->
+                  match (fv, back_ty) with
+                  | Some _, Some ((back_sg : back_sg_info), _) ->
+                      back_sg.stateful && back_sg.inputs = []
+                      && back_sg.outputs = []
+                  | _ -> false)
+                entries
+            in
+            eager_stateful_backs :=
+              List.filter_map
+                (fun (_, (fv, _)) -> Option.map mk_texpr_from_fvar fv)
+                eager;
+            let eager_ignored = List.map fst eager in
+            let backs, ignored =
+              List.partition (fun (_, (v, _)) -> Option.is_some v) entries
             in
             let ignored = List.map fst ignored in
             let backs =
               List.map
-                (fun (aid, fv) ->
+                (fun (aid, (fv, back_ty)) ->
                   let fvar = mk_texpr_from_fvar (Option.get fv) in
-                  (aid, { fvar; can_fail = false }))
+                  let back_sg, _ = Option.get back_ty in
+                  let effect_info = back_sg.effect_info in
+                  let evaluated = back_sg_is_evaluated back_sg in
+                  ( aid,
+                    {
+                      fvar;
+                      can_fail =
+                        fun_effect_is_monadic effect_info && not evaluated;
+                      stateful = back_sg.stateful;
+                      stateful_input =
+                        (if back_sg.stateful then Some call.dest else None);
+                      stateful_root =
+                        (if back_sg.stateful then stateful_root else None);
+                    } ))
                 backs
             in
             let ctx =
@@ -480,7 +782,8 @@ and translate_function_call_aux (call : S.call) (e : S.expr) (ctx : bs_ctx) :
                 ctx with
                 abs_id_to_info = V.AbsId.Map.add_list backs ctx.abs_id_to_info;
                 ignored_abs_ids =
-                  V.AbsId.Set.add_list ignored ctx.ignored_abs_ids;
+                  V.AbsId.Set.add_list (eager_ignored @ ignored)
+                    ctx.ignored_abs_ids;
               }
             in
             ctx
@@ -526,7 +829,12 @@ and translate_function_call_aux (call : S.call) (e : S.expr) (ctx : bs_ctx) :
               | _ -> [%craise] ctx.span "Unreachable"
             in
             let effect_info =
-              { can_fail = false; can_diverge = false; is_rec = false }
+              {
+                can_fail = false;
+                effectful = false;
+                can_diverge = false;
+                is_rec = false;
+              }
             in
             let ctx, dest = fresh_var_for_symbolic_value call.dest ctx in
             let dest = mk_tpat_from_fvar dest_mplace dest in
@@ -541,6 +849,7 @@ and translate_function_call_aux (call : S.call) (e : S.expr) (ctx : bs_ctx) :
             let effect_info =
               {
                 can_fail = overflow <> OWrap;
+                effectful = false;
                 can_diverge = false;
                 is_rec = false;
               }
@@ -589,7 +898,9 @@ and translate_function_call_aux (call : S.call) (e : S.expr) (ctx : bs_ctx) :
               [%craise] ctx.span "Unsupported: `dyn Trait` concretization"
         in
         (* Note that casts can fail *)
-        let effect_info = { can_fail; can_diverge = false; is_rec = false } in
+        let effect_info =
+          { can_fail; effectful = false; can_diverge = false; is_rec = false }
+        in
         let ctx, dest = fresh_var_for_symbolic_value call.dest ctx in
         let dest = mk_tpat_from_fvar dest_mplace dest in
         (ctx, Unop (Cast kind), effect_info, args, [], dest)
@@ -606,6 +917,7 @@ and translate_function_call_aux (call : S.call) (e : S.expr) (ctx : bs_ctx) :
             let effect_info =
               {
                 can_fail = ExpressionsUtils.binop_can_fail binop;
+                effectful = false;
                 can_diverge = false;
                 is_rec = false;
               }
@@ -672,7 +984,8 @@ and translate_function_call_aux (call : S.call) (e : S.expr) (ctx : bs_ctx) :
   let func = { id = FunOrOp fun_id; generics } in
   let input_tys = (List.map (fun (x : texpr) -> x.ty)) args in
   let ret_ty =
-    if effect_info.can_fail then mk_result_ty dest_v.ty else dest_v.ty
+    if fun_effect_is_monadic effect_info then mk_result_ty dest_v.ty
+    else dest_v.ty
   in
   let func_ty = mk_arrows input_tys ret_ty in
   let func = { e = Qualif func; ty = func_ty } in
@@ -769,14 +1082,25 @@ and translate_function_call_aux (call : S.call) (e : S.expr) (ctx : bs_ctx) :
     ^ pure_ty_to_string ctx call_e.ty];
   [%sanity_check] ctx.span
     (let call_ty =
-       if effect_info.can_fail then unwrap_result_ty ctx.span call_e.ty
+       if fun_effect_is_monadic effect_info then
+         unwrap_result_ty ctx.span call_e.ty
        else call_e.ty
      in
      dest_v.ty = call_ty);
   (* Translate the next expression *)
   let next_e = translate_expr e ctx in
+  let next_e =
+    List.fold_right
+      (fun back next_e ->
+        [%add_loc] mk_closed_checked_let ctx true
+          (mk_ignored_pat mk_unit_ty)
+          back next_e)
+      !eager_stateful_backs next_e
+  in
   (* Put together *)
-  [%add_loc] mk_closed_checked_let ctx effect_info.can_fail dest_v call_e next_e
+  [%add_loc] mk_closed_checked_let ctx
+    (fun_effect_is_monadic effect_info)
+    dest_v call_e next_e
 
 and translate_cast_unsize (call : S.call) (e : S.expr) (ty0 : T.ty) (ty1 : T.ty)
     (ctx : bs_ctx) : texpr =
@@ -870,7 +1194,7 @@ and translate_end_abs (ectx : C.eval_ctx) (abs : V.abs)
   match abs.kind with
   | V.SynthInput rg_id ->
       translate_end_abstraction_synth_input ectx abs e ctx rg_id abs_level
-  | V.FunCall (call_id, _) ->
+  | V.FunCall (call_id, _, _) ->
       translate_end_abstraction_fun_call ectx abs abs_level e call_id ctx
   | V.SynthRet rg_id ->
       translate_end_abstraction_synth_ret ectx abs e ctx rg_id abs_level
@@ -1127,12 +1451,102 @@ and translate_end_abstraction_fun_call (ectx : C.eval_ctx) (abs : V.abs)
           ^ "\nfunc type: "
           ^ pure_ty_to_string ctx info.fvar.ty
           ^ "\n\nargs:\n" ^ String.concat "\n" args];
-        let call = [%add_loc] mk_apps ctx.span info.fvar args in
-        (* Introduce a match if necessary *)
-        let ctx, (output, call) = decompose_let_match ctx output call in
-        (* Translate the next expression and construct the let *)
-        [%add_loc] mk_closed_checked_let ctx info.can_fail output call
-          (next_e ctx)
+        (* A stateful backward value is now an ordinary effectful function
+           [A -> Result B], so there is no wrapper [Result] to strip. *)
+        let input_tys, raw_output_ty = destruct_arrows info.fvar.ty in
+        let result_output_ty =
+          if info.can_fail then unwrap_result_ty ctx.span raw_output_ty
+          else raw_output_ty
+        in
+        let ctx, args =
+          match (args, input_tys) with
+          | [], [ input_ty ] when info.stateful ->
+              let input =
+                match info.stateful_root with
+                | Some root -> (
+                    match
+                      V.SymbolicValueId.Map.find_opt root
+                        ctx.pending_stateful_values
+                    with
+                    | Some value ->
+                        [%sanity_check] ctx.span (value.ty = input_ty);
+                        value
+                    | None ->
+                        let symbolic = Option.get info.stateful_input in
+                        let value = symbolic_value_to_texpr ctx symbolic in
+                        [%sanity_check] ctx.span (value.ty = input_ty);
+                        value)
+                | None ->
+                    let symbolic = Option.get info.stateful_input in
+                    let value = symbolic_value_to_texpr ctx symbolic in
+                    [%sanity_check] ctx.span (value.ty = input_ty);
+                    value
+              in
+              let pending_stateful_values =
+                match info.stateful_root with
+                | Some root ->
+                    V.SymbolicValueId.Map.remove root
+                      ctx.pending_stateful_values
+                | None -> ctx.pending_stateful_values
+              in
+              ({ ctx with pending_stateful_values }, [ input ])
+          | _ -> (ctx, args)
+        in
+        let ctx, output =
+          if info.stateful && not (ty_is_unit result_output_ty) then
+            if ty_is_unit output.ty then
+              let ctx, value =
+                fresh_var (Some "stateful_value") result_output_ty ctx
+              in
+              let pending_stateful_values =
+                match info.stateful_root with
+                | Some root ->
+                    V.SymbolicValueId.Map.add root (mk_texpr_from_fvar value)
+                      ctx.pending_stateful_values
+                | None -> ctx.pending_stateful_values
+              in
+              ( { ctx with pending_stateful_values },
+                mk_tpat_from_fvar None value )
+            else
+              let value =
+                [%silent_unwrap] ctx.span (tpat_to_texpr ctx.span output)
+              in
+              let pending_stateful_values =
+                match info.stateful_root with
+                | Some root ->
+                    V.SymbolicValueId.Map.add root value
+                      ctx.pending_stateful_values
+                | None -> ctx.pending_stateful_values
+              in
+              ({ ctx with pending_stateful_values }, output)
+          else
+            let pending_stateful_values =
+              if info.stateful && input_tys <> [] && ty_is_unit result_output_ty
+              then
+                match info.stateful_root with
+                | Some root ->
+                    V.SymbolicValueId.Map.remove root
+                      ctx.pending_stateful_values
+                | None -> ctx.pending_stateful_values
+              else ctx.pending_stateful_values
+            in
+            ({ ctx with pending_stateful_values }, output)
+        in
+        let apply ctx func =
+          let call = [%add_loc] mk_apps ctx.span func args in
+          let ctx, (output, call) =
+            if info.stateful then (ctx, (output, call))
+            else decompose_let_match ctx output call
+          in
+          if info.stateful then
+            mk_closed_let ctx.span info.can_fail output call (next_e ctx)
+          else
+            [%add_loc] mk_closed_checked_let ctx info.can_fail output call
+              (next_e ctx)
+        in
+        (* The effect is discharged by this application, with the guard in
+           hand, so a stateful backward value needs no special treatment. *)
+        apply ctx info.fvar
 
 and translate_end_abs_identity (ectx : C.eval_ctx) (abs : V.abs)
     (abs_level : abs_level) (e : S.expr) (ctx : bs_ctx) : texpr =
@@ -1291,22 +1705,61 @@ and translate_end_abstraction_join_or_loop (ectx : C.eval_ctx) (abs : V.abs)
         (V.AbsId.Set.mem abs.abs_id ctx.ignored_abs_ids
         || (back_inputs = [] && outputs = []));
       next_e ctx
-  | Some { fvar = func; can_fail } ->
+  | Some ({ fvar = func; can_fail; stateful; _ } as info) ->
       [%ltrace
         let args = List.map (texpr_to_string ctx) args in
         "func: " ^ texpr_to_string ctx func ^ "\nfunc type: "
         ^ pure_ty_to_string ctx func.ty
         ^ "\n\nargs:\n" ^ String.concat "\n" args];
-      let call = [%add_loc] mk_apps ctx.span func args in
-      (* Introduce a match if necessary *)
-      let ctx, (output, call) = decompose_let_match ctx output call in
-      (* Translate the next expression and construct the let *)
-      let next_e = next_e ctx in
-      [%ltrace
-        "About to reconstruct let-bindings:" ^ "\n- output: "
-        ^ tpat_to_string ctx output ^ "\n- call: " ^ texpr_to_string ctx call
-        ^ "\n- next:\n" ^ texpr_to_string ctx next_e];
-      [%add_loc] mk_closed_checked_let ctx can_fail output call next_e
+      let input_tys, _ = destruct_arrows info.fvar.ty in
+      let args =
+        match (args, input_tys) with
+        | [], [ input_ty ] ->
+            let value =
+              match info.stateful_root with
+              | Some root -> (
+                  match
+                    V.SymbolicValueId.Map.find_opt root
+                      ctx.pending_stateful_values
+                  with
+                  | Some value -> value
+                  | None ->
+                      let symbolic = Option.get info.stateful_input in
+                      symbolic_value_to_texpr ctx symbolic)
+              | None ->
+                  let symbolic = Option.get info.stateful_input in
+                  symbolic_value_to_texpr ctx symbolic
+            in
+            [%sanity_check] ctx.span (value.ty = input_ty);
+            [ value ]
+        | _ -> args
+      in
+      let apply ctx func =
+        let call = [%add_loc] mk_apps ctx.span func args in
+        let ctx, (output, call) =
+          if stateful then (ctx, (output, call))
+          else decompose_let_match ctx output call
+        in
+        let ctx =
+          match (info.stateful_root, tpat_to_texpr ctx.span output) with
+          | Some root, Some value when not (ty_is_unit value.ty) ->
+              {
+                ctx with
+                pending_stateful_values =
+                  V.SymbolicValueId.Map.add root value
+                    ctx.pending_stateful_values;
+              }
+          | _ -> ctx
+        in
+        let next_e = next_e ctx in
+        [%ltrace
+          "About to reconstruct let-bindings:" ^ "\n- output: "
+          ^ tpat_to_string ctx output ^ "\n- call: " ^ texpr_to_string ctx call
+          ^ "\n- next:\n" ^ texpr_to_string ctx next_e];
+        if stateful then mk_closed_let ctx.span can_fail output call next_e
+        else [%add_loc] mk_closed_checked_let ctx can_fail output call next_e
+      in
+      apply ctx func
 
 and translate_end_abstraction_with_cont (ectx : C.eval_ctx) (abs : V.abs)
     (abs_level : abs_level) (e : S.expr) (ctx : bs_ctx) : texpr =
@@ -1696,7 +2149,8 @@ and translate_forward_end (return_value : (C.eval_ctx * V.tvalue) option)
                 mk_simpl_tuple_texpr ctx.span outputs
               in
               (* Wrap in a result if the backward function can fail *)
-              if effect_info.can_fail then mk_result_ok_texpr ctx.span output
+              if fun_effect_is_monadic effect_info then
+                mk_result_ok_texpr ctx.span output
               else output
             in
             let mk_panic =
@@ -1777,22 +2231,25 @@ and translate_forward_end (return_value : (C.eval_ctx * V.tvalue) option)
      or not). We evaluate them straight away if they can fail and have no
      inputs. *)
   let evaluate_backs =
-    List.map
-      (fun (sg : back_sg_info) ->
-        if !Config.simplify_merged_fwd_backs then
-          sg.inputs = [] && sg.effect_info.can_fail
-        else false)
+    List.map back_sg_is_evaluated
       (RegionGroupId.Map.values ctx.sg.fun_ty.back_sg)
   in
 
   (* Introduce variables for the backward functions.
        We lookup the LLBC definition in an attempt to derive pretty names
        for those functions. *)
-  let _, back_vars = fresh_back_vars_for_current_fun ctx in
+  let _, back_vars = fresh_back_vars_for_current_fun ~evaluate_backs ctx in
 
   (* Create the return expressions *)
   let vars =
-    let back_vars = List.filter_map (fun x -> x) back_vars in
+    let back_vars =
+      List.filter_map
+        (fun ((sg : back_sg_info), (evaluate, var)) ->
+          if evaluate && sg.outputs = [] then None else var)
+        (List.combine
+           (RegionGroupId.Map.values ctx.sg.fun_ty.back_sg)
+           (List.combine evaluate_backs back_vars))
+    in
     if ctx.sg.fun_ty.fwd_info.ignore_output then back_vars
     else pure_fwd_var :: back_vars
   in
@@ -1831,7 +2288,9 @@ and translate_forward_end (return_value : (C.eval_ctx * V.tvalue) option)
 
   (* Bind the expression for the forward output *)
   let pat = mk_tpat_from_fvar None pure_fwd_var in
-  [%add_loc] mk_closed_checked_let ctx fwd_effect_info.can_fail pat fwd_e e
+  [%add_loc] mk_closed_checked_let ctx
+    (fun_effect_is_monadic fwd_effect_info)
+    pat fwd_e e
 
 and translate_loop (loop : S.loop) (ctx0 : bs_ctx) : texpr =
   [%ldebug symbolic_loop_to_string ctx0 loop];
@@ -1858,7 +2317,7 @@ and translate_loop (loop : S.loop) (ctx0 : bs_ctx) : texpr =
     List.map (tvalue_to_texpr ctx loop.ctx) input_values
   in
   (* Introduce free variables for the inputs *)
-  let bind_inputs (ctx : bs_ctx) (absl : V.abs list)
+  let bind_inputs ?(root_hints = []) (ctx : bs_ctx) (absl : V.abs list)
       (values : V.symbolic_value list) : bs_ctx * tpat list * tpat list =
     let ctx, absl =
       (* Compute the type of the input abstractions *)
@@ -1881,11 +2340,24 @@ and translate_loop (loop : S.loop) (ctx0 : bs_ctx) : texpr =
       in
       (* Register the mapping from abs to free variable *)
       let ctx =
+        let stateful_inputs = match_continuation_inputs ctx absl fvars values in
         let fvars =
-          List.map
-            (fun (aid, fv) ->
-              (aid, { fvar = mk_texpr_from_fvar fv; can_fail = false }))
-            fvars
+          List.map2
+            (fun (aid, (fv : fvar)) stateful_input ->
+              let _, output_ty = destruct_arrows fv.ty in
+              let abs =
+                List.find (fun (abs : V.abs) -> abs.abs_id = aid) absl
+              in
+              ( aid,
+                {
+                  fvar = mk_texpr_from_fvar fv;
+                  can_fail =
+                    Option.is_some (opt_destruct_result ctx.span output_ty);
+                  stateful = false;
+                  stateful_input;
+                  stateful_root = stateful_root_of_abs ctx abs;
+                } ))
+            fvars stateful_inputs
         in
         {
           ctx with
@@ -1896,9 +2368,12 @@ and translate_loop (loop : S.loop) (ctx0 : bs_ctx) : texpr =
       (* *)
       (ctx, List.map snd fvars)
     in
-    let ctx, values = fresh_vars_for_symbolic_values values ctx in
+    let ctx, value_fvars = fresh_vars_for_symbolic_values values ctx in
+    let ctx =
+      register_stateful_output_values ~root_hints ctx values value_fvars
+    in
     let mk_pats = List.map (mk_tpat_from_fvar None) in
-    (ctx, mk_pats absl, mk_pats values)
+    (ctx, mk_pats absl, mk_pats value_fvars)
   in
 
   (* Translate the loop input abstractions *)
@@ -1926,8 +2401,28 @@ and translate_loop (loop : S.loop) (ctx0 : bs_ctx) : texpr =
     ^ String.concat "\n\n" (List.map (texpr_to_string ctx) inputs)];
 
   (* Introduce the binders for the loop outputs *)
+  let input_root_hints =
+    List.map
+      (fun (sv : V.symbolic_value) ->
+        stateful_root_of_tvalue ctx
+          (V.SymbolicValueId.Map.find sv.sv_id loop.input_value_to_value))
+      loop.input_svalues
+  in
+  let break_root_hints =
+    List.mapi
+      (fun i (sv : V.symbolic_value) ->
+        match
+          (List.nth_opt loop.input_svalues i, List.nth_opt input_root_hints i)
+        with
+        | Some input_sv, Some root
+          when translate_fwd_ty (Some ctx.span) ctx.decls_ctx input_sv.sv_ty
+               = translate_fwd_ty (Some ctx.span) ctx.decls_ctx sv.sv_ty -> root
+        | _ -> None)
+      loop.break_svalues
+  in
   let ctx, break_abs, break_values =
-    bind_inputs ctx loop.break_abs loop.break_svalues
+    bind_inputs ~root_hints:break_root_hints ctx loop.break_abs
+      loop.break_svalues
   in
   let outputs = break_values @ break_abs in
   let output = mk_simpl_tuple_pat outputs in
@@ -1945,7 +2440,8 @@ and translate_loop (loop : S.loop) (ctx0 : bs_ctx) : texpr =
   let loop_body =
     (* Introduce free variables for the inputs *)
     let ctx, input_conts, input_values =
-      bind_inputs ctx0 loop.input_abs loop.input_svalues
+      bind_inputs ~root_hints:input_root_hints ctx0 loop.input_abs
+        loop.input_svalues
     in
 
     (* Update the [mk_panic], [mk_result], etc. functions *)
@@ -2063,11 +2559,24 @@ and translate_let (ctx0 : bs_ctx) (lete : S.let_expr) : texpr =
       in
       (* Register the mapping from abs to free variable *)
       let ctx =
+        let stateful_inputs = match_continuation_inputs ctx absl fvars values in
         let fvars =
-          List.map
-            (fun (aid, fv) ->
-              (aid, { fvar = mk_texpr_from_fvar fv; can_fail = false }))
-            fvars
+          List.map2
+            (fun (aid, (fv : fvar)) stateful_input ->
+              let _, output_ty = destruct_arrows fv.ty in
+              let abs =
+                List.find (fun (abs : V.abs) -> abs.abs_id = aid) absl
+              in
+              ( aid,
+                {
+                  fvar = mk_texpr_from_fvar fv;
+                  can_fail =
+                    Option.is_some (opt_destruct_result ctx.span output_ty);
+                  stateful = false;
+                  stateful_input;
+                  stateful_root = stateful_root_of_abs ctx abs;
+                } ))
+            fvars stateful_inputs
         in
         {
           ctx with
@@ -2078,9 +2587,10 @@ and translate_let (ctx0 : bs_ctx) (lete : S.let_expr) : texpr =
       (* *)
       (ctx, List.map snd fvars)
     in
-    let ctx, values = fresh_vars_for_symbolic_values values ctx in
+    let ctx, value_fvars = fresh_vars_for_symbolic_values values ctx in
+    let ctx = register_stateful_output_values ctx values value_fvars in
     let mk_pats = List.map (mk_tpat_from_fvar None) in
-    (ctx, mk_pats absl, mk_pats values)
+    (ctx, mk_pats absl, mk_pats value_fvars)
   in
 
   (* Introduce the binders for the outputs *)

@@ -29,7 +29,8 @@ let translate_fun_decl_body (ctx : bs_ctx) (signature : fun_sig) (body : S.expr)
               function forward expression")
     | Some output ->
         (* Wrap in a result if the function can fail *)
-        if effect_info.can_fail then mk_result_ok_texpr ctx.span output
+        if fun_effect_is_monadic effect_info then
+          mk_result_ok_texpr ctx.span output
         else output
   in
   let mk_panic =

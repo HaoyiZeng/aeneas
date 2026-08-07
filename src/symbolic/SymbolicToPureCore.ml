@@ -110,7 +110,14 @@ type loop_info = {
 }
 [@@deriving show]
 
-type back_fun_info = { fvar : texpr; can_fail : bool } [@@deriving show]
+type back_fun_info = {
+  fvar : texpr;
+  can_fail : bool;
+  stateful : bool;
+  stateful_input : V.symbolic_value option;
+  stateful_root : V.symbolic_value_id option;
+}
+[@@deriving show]
 
 (** Some meta-information. See [bs_ctx.meta_symb_places] *)
 type meta_symb_place = texpr * string [@@deriving show, ord]
@@ -305,6 +312,11 @@ type bs_ctx = {
           which we did not introduce any variable in the translation: when we
           fail to lookup a region abstraction in [abs_id_to_fvar] we check that
           it is registered in this set. *)
+  stateful_roots : V.symbolic_value_id V.SymbolicValueId.Map.t;
+      (** Maps symbolic values produced by related stateful calls to the root
+          acquisition whose guard they update. *)
+  pending_stateful_values : texpr V.SymbolicValueId.Map.t;
+      (** Current guard value for each independent stateful acquisition. *)
   meta_symb_places : MetaSymbPlaceSet.t;
       (** Keep track of the [SymbolicPlaces] meta-information that we already
           inserted, to prevent duplication (there tends to be a *lot* of
