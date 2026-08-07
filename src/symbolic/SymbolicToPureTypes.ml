@@ -40,6 +40,37 @@ let translate_literal_type (ty : V.literal_type) : literal_type =
   | V.TBool -> TBool
   | V.TChar -> TChar
 
+let region_group_is_stateful (span : Meta.span option)
+    (generics : T.generic_params) (regions_hierarchy : T.region_var_groups)
+    (gid : T.RegionGroupId.id) : bool =
+  if not !Config.stateful_lifetimes then false
+  else
+    let group =
+      [%silent_unwrap_opt_span] span
+        (List.find_opt
+           (fun (group : T.region_var_group) -> group.id = gid)
+           regions_hierarchy)
+    in
+    let flags =
+      List.map
+        (fun rid ->
+          let region =
+            [%silent_unwrap_opt_span] span
+              (List.find_opt
+                 (fun (region : T.region_param) -> region.index = rid)
+                 generics.regions)
+          in
+          region.stateful)
+        group.regions
+    in
+    if List.exists (fun flag -> flag) flags then (
+      [%cassert_opt_span] span
+        (List.for_all (fun flag -> flag) flags)
+        "Stateful and non-stateful lifetimes were merged into the same region \
+         group";
+      true)
+    else false
+
 let translate_const_generic_param (span : span option)
     (c : Types.const_generic_param) : const_generic_param =
   match c.ty with
@@ -732,6 +763,11 @@ and compute_raw_fun_effect_info (span : Meta.span option)
       {
         (* Note that backward functions can't fail *)
         can_fail = info.can_fail && gid = None;
+        effectful =
+          (!Config.stateful_lifetimes
+          &&
+          if Option.is_none gid then info.stateful || info.has_stateful_regions
+          else info.stateful);
         can_diverge = info.can_diverge;
         is_rec = info.is_rec && gid = None;
       }
@@ -739,6 +775,7 @@ and compute_raw_fun_effect_info (span : Meta.span option)
       {
         (* Note that backward functions can't fail *)
         can_fail = Builtin.builtin_fun_can_fail aid && gid = None;
+        effectful = false;
         can_diverge = false;
         is_rec = false;
       }
@@ -773,8 +810,8 @@ and compute_raw_fun_effect_info (span : Meta.span option)
     gives the correct behavior. *)
 and translate_inst_fun_sig_to_decomposed_fun_type (span : Meta.span option)
     (decls_ctx : C.decls_ctx) (fun_id : fn_ptr_kind) (sg : A.inst_fun_sig)
-    (uninst_output : Types.ty) (input_names : string option list) :
-    decomposed_fun_type =
+    (is_stateful_group : T.RegionGroupId.id -> bool) (uninst_output : Types.ty)
+    (input_names : string option list) : decomposed_fun_type =
   [%ltrace
     let ctx = Print.Contexts.decls_ctx_to_fmt_env decls_ctx in
     "- sg.regions_hierarchy: "
@@ -830,18 +867,46 @@ and translate_inst_fun_sig_to_decomposed_fun_type (span : Meta.span option)
   let translate_back_inputs_or_outputs_for_gid ~(to_input : bool)
       (gid : T.RegionGroupId.id) : (abs_level * (string option * ty) list) list
       =
+    let stateful = is_stateful_group gid in
+    let contains_group ty =
+      TypesUtils.ty_has_regions_in_pred
+        (fun region ->
+          match region with
+          | T.RVar (Free _) -> get_region_group region = gid
+          | _ -> false)
+        ty
+    in
+    let rec translate_stateful_input ty =
+      match ty with
+      | T.TAdt { id = TTuple; generics } ->
+          let fields =
+            List.filter_map translate_stateful_input generics.types
+          in
+          if fields = [] then None else Some (mk_simpl_tuple_ty fields)
+      | _ ->
+          if contains_group ty then Some (translate_fwd_ty span decls_ctx ty)
+          else None
+    in
     (* Translate the inputs level by level, starting with the highest level *)
     let num_levels =
       compute_back_tys_num_levels span decls_ctx get_region_group gid sg.inputs
         sg.output
     in
-    let translate_ty ~from_input level =
-      if to_input then
+    let num_levels =
+      if stateful && contains_group sg.output then max 1 num_levels
+      else num_levels
+    in
+    let translate_ty ~from_input level ty =
+      if
+        to_input && stateful && (not from_input) && level = 0
+        && contains_group ty
+      then translate_stateful_input ty
+      else if to_input then
         translate_back_input_ty span decls_ctx get_region_group gid level
-          ~from_input
+          ~from_input ty
       else
         translate_back_output_ty span decls_ctx get_region_group gid level
-          ~from_input
+          ~from_input ty
     in
     let translate_level (level : int) :
         (abs_level * (string option * ty) list) option =
@@ -968,13 +1033,37 @@ and translate_inst_fun_sig_to_decomposed_fun_type (span : Meta.span option)
     *)
     let back_effect_info =
       let b = inputs <> [] in
-      { back_effect_info with can_fail = back_effect_info.can_fail && b }
+      {
+        back_effect_info with
+        can_fail = back_effect_info.can_fail && b;
+        (* A stateful region group performs an effect when its lifetime ends,
+           by definition of the [#[verify::stateful_lifetimes]] attribute.
+
+           We must take [is_stateful_group] into account here rather than rely
+           on [back_effect_info.effectful] alone: the latter is derived from
+           [FunsAnalysis], where [stateful] means "transitively *calls* a
+           function carrying a stateful lifetime". That is false for the opaque
+           lock/guard API functions which *declare* the stateful lifetime, so
+           the two disagree exactly on the functions the feature targets. *)
+        effectful = back_effect_info.effectful || is_stateful_group gid;
+      }
     in
     let outputs = compute_back_outputs_for_gid gid in
     let filter =
-      !Config.simplify_merged_fwd_backs && inputs = [] && outputs = []
+      !Config.simplify_merged_fwd_backs
+      && (not back_effect_info.effectful)
+      && (not (is_stateful_group gid))
+      && inputs = [] && outputs = []
     in
-    let info = { inputs; outputs; effect_info = back_effect_info; filter } in
+    let info =
+      {
+        inputs;
+        outputs;
+        effect_info = back_effect_info;
+        stateful = is_stateful_group gid;
+        filter;
+      }
+    in
     (gid, info)
   in
   let back_sg =
@@ -1046,8 +1135,11 @@ and translate_fun_sigs (span : span option) (decls_ctx : C.decls_ctx)
   let fun_ty =
     (* Here the signature is not instantiated, so the uninstantiated output is
        simply the signature's output. *)
+    let is_stateful_group =
+      region_group_is_stateful span sg.item_binder_params regions_hierarchy
+    in
     translate_inst_fun_sig_to_decomposed_fun_type span decls_ctx fun_id inst_sg
-      inst_sg.output input_names
+      is_stateful_group inst_sg.output input_names
   in
   let dsg =
     { generics; llbc_generics = sg.item_binder_params; preds; fun_ty }
@@ -1149,11 +1241,33 @@ and translate_fun_sigs_from_decl (decls_ctx : C.decls_ctx)
 
 and mk_output_ty_from_effect_info (effect_info : fun_effect_info) (ty : ty) : ty
     =
-  if effect_info.can_fail then mk_result_ty ty else ty
+  if fun_effect_is_monadic effect_info then mk_result_ty ty else ty
 
 and mk_back_output_ty_from_effect_info (effect_info : fun_effect_info)
     (inputs : ty list) (ty : ty) : ty =
-  if effect_info.can_fail && inputs <> [] then mk_result_ty ty else ty
+  if effect_info.effectful || (effect_info.can_fail && inputs <> []) then
+    mk_result_ty ty
+  else ty
+
+(** [true] if a backward function is evaluated directly inside the body of the
+    forward function instead of being returned as a value.
+
+    This is the "merged forward/backward" simplification: a backward function
+    with no input has nothing to wait for, so when it is monadic we run it
+    eagerly and return its result, which lets us strip the [Result] that would
+    otherwise wrap it inside the returned tuple.
+
+    Stateful backward functions take part in this exactly like any other
+    effectful one — they are ordinary [A -> Result B] values. The single
+    exception is a stateful group with no output: an ordinary backward function
+    returning nothing can simply be dropped, but a stateful one still has to
+    run, so it is routed through the dedicated eager path in
+    [translate_function_call] instead. *)
+and back_sg_is_evaluated (info : back_sg_info) : bool =
+  !Config.simplify_merged_fwd_backs
+  && info.inputs = []
+  && fun_effect_is_monadic info.effect_info
+  && not (info.stateful && info.outputs = [])
 
 (** Compute the arrow types for all the backward functions.
 
@@ -1175,10 +1289,22 @@ and compute_back_tys_with_info (dsg : Pure.decomposed_fun_type) :
           back_sg.outputs
       in
       (* Filter if necessary *)
-      if !Config.simplify_merged_fwd_backs && inputs = [] && outputs = [] then
-        None
+      if back_sg.filter then None
       else
         let output = mk_simpl_tuple_ty outputs in
+        (* Wrap the *codomain*, never the arrow: a stateful backward function
+           has type [A -> Result B], not [Result (A -> B)].
+
+           The distinction matters as soon as the monad carries real effects
+           (which it does: [Result] is an [ITree]). With [Result (A -> B)] the
+           effect is discharged by the bind that produces the function, i.e.
+           before the argument exists, so a lock release can never observe the
+           guard it releases. See [LtStatefulEffectCheck] for the proof, and
+           [LtStatefulContractCheck] for the pinned signatures.
+
+           Note that for a group with no inputs the two shapes coincide
+           ([mk_arrows [] (Result B)] is [Result B]), so those signatures are
+           unaffected. *)
         let output =
           mk_back_output_ty_from_effect_info effect_info inputs output
         in
@@ -1194,7 +1320,24 @@ and compute_back_tys (dsg : Pure.decomposed_fun_type) : ty option list =
     as well as the types of the returned backward functions). *)
 and compute_output_ty_from_decomposed (dsg : Pure.decomposed_fun_type) : ty =
   (* Compute the arrow types for all the backward functions *)
-  let back_tys = List.filter_map (fun x -> x) (compute_back_tys dsg) in
+  let back_tys =
+    List.filter_map
+      (function
+        | Some ((back_sg : back_sg_info), ty) when back_sg_is_evaluated back_sg
+          ->
+            if back_sg.outputs = [] then None
+            else
+              Some
+                (match ty with
+                | TAdt
+                    ( TBuiltin TResult,
+                      { types = [ ty ]; const_generics = []; trait_refs = [] }
+                    ) -> ty
+                | _ -> [%internal_error_opt_span] None)
+        | Some (_, ty) -> Some ty
+        | None -> None)
+      (compute_back_tys_with_info dsg)
+  in
   (* Group the forward output and the types of the backward functions *)
   let effect_info = dsg.fwd_info.effect_info in
   let output =
