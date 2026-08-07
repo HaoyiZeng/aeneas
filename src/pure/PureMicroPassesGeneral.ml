@@ -547,8 +547,16 @@ let simplify_let_bindings_visitor (ctx : ctx) (def : fun_decl) =
             },
             x ) ->
           [%ldebug "Case: result"];
-          (* return/fail case *)
-          if variant_id = result_ok_id then
+          (* Return/fail case.
+
+             This rewrites [let x <-- ok e in next] into [let x = e in next],
+             which is only valid for a *monadic* let-binding. A non-monadic let
+             may legitimately bind a first-class [Result] value — for instance a
+             backward function with no input which is returned to the caller
+             rather than evaluated in the body (see [back_sg_is_evaluated]).
+             Stripping the [ok] there would leave the binding ill-typed. *)
+          if not monadic then super#visit_Let env monadic lv rv next
+          else if variant_id = result_ok_id then
             (* Return case - note that the simplification we just perform
                  might have unlocked the tuple simplification below *)
             self#visit_Let env false lv x next
@@ -613,6 +621,38 @@ let simplify_let_bindings =
   lift_expr_map_visitor_with_state simplify_let_bindings_visitor
     FVarId.Set.empty
 
+(** [true] if calling this function may perform an observable effect.
+
+    Such a call may not be shared with a syntactically identical one: unlike
+    partiality, an effect is not idempotent, so replacing the second of two
+    identical lock acquisitions by the result of the first turns two
+    acquisitions into one. See [acquire_same_lock_twice] in
+    [tests/src/lt-stateful-optimizer-hostile.rs]. *)
+let fn_ptr_kind_is_effectful (ctx : ctx) (kind : fn_ptr_kind) : bool =
+  !Config.stateful_lifetimes
+  &&
+  let id =
+    match kind with
+    | FunId (FRegular id) -> Some (LlbcAst.FunOrMethodId.Fun id)
+    | TraitMethod (trait_ref, method_id) ->
+        Some
+          (LlbcAst.FunOrMethodId.Method
+             (trait_ref.trait_decl_ref.trait_decl_id, method_id))
+    | FunId (FBuiltin _) -> None
+  in
+  match
+    Option.bind id
+      (FunsAnalysis.lookup_fun_info ctx.trans_ctx.fun_ctx.fun_infos)
+  with
+  | Some info -> info.stateful || info.has_stateful_regions
+  | None -> false
+
+let texpr_is_effectful_call (ctx : ctx) (e : texpr) : bool =
+  match destruct_apps e with
+  | { e = Qualif { id = FunOrOp (Fun (FromLlbc (kind, _))); _ }; _ }, _ :: _ ->
+      fn_ptr_kind_is_effectful ctx kind
+  | _ -> false
+
 (** Remove the duplicated function calls.
 
     We naturally write code which contains several times the same expression.
@@ -638,7 +678,7 @@ let simplify_let_bindings =
 
     TODO: this micro-pass will not be sound anymore once we allow stateful
     (backward) functions. *)
-let simplify_duplicate_calls_visitor (_ctx : ctx) (def : fun_decl) =
+let simplify_duplicate_calls_visitor (ctx : ctx) (def : fun_decl) =
   object (self)
     inherit [_] map_expr as super
 
@@ -648,13 +688,14 @@ let simplify_duplicate_calls_visitor (_ctx : ctx) (def : fun_decl) =
          variables *)
       let env =
         let factor =
-          monadic
-          ||
-          match destruct_apps bound with
-          | { e = FVar _; _ }, _ :: _ ->
-              (* May be a backward function call *)
-              true
-          | _ -> false
+          (not (texpr_is_effectful_call ctx bound))
+          && (monadic
+             ||
+             match destruct_apps bound with
+             | { e = FVar _; _ }, _ :: _ ->
+                 (* May be a backward function call *)
+                 true
+             | _ -> false)
         in
         if factor then
           match tpat_to_texpr def.item_meta.span pat with
