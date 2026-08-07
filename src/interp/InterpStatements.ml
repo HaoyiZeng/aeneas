@@ -20,6 +20,44 @@ let log = L.statements_log
 
 (** Drop a value at a given place - TODO: factorize this with [assign_to_place]
 *)
+let end_abstractions_referencing_sids (config : config) (span : Meta.span)
+    (initial_sids : SymbolicValueId.Set.t) : cm_fun =
+ fun ctx ->
+  let rec end_matching tracked_sids : cm_fun =
+   fun ctx ->
+    let matching_abs =
+      List.filter_map
+        (fun (abs : abs) ->
+          let stateful =
+            match abs.kind with
+            | FunCall (_, _, stateful) -> stateful
+            | SynthInput _
+            | SynthRet _
+            | Loop _
+            | Identity
+            | CopySymbolicValue
+            | WithCont
+            | Join -> false
+          in
+          if (not abs.can_end) || not stateful then None
+          else
+            let abs_ids, _ = compute_abs_ids abs in
+            if
+              SymbolicValueId.Set.is_empty
+                (SymbolicValueId.Set.inter tracked_sids abs_ids.sids)
+            then None
+            else Some (abs, abs_ids.sids))
+        (AbsId.Map.values (env_get_abs ctx.env))
+    in
+    match matching_abs with
+    | [] -> (ctx, fun e -> e)
+    | (abs, abs_sids) :: _ ->
+        let tracked_sids = SymbolicValueId.Set.union tracked_sids abs_sids in
+        let ctx, cc = InterpBorrows.end_abs config span abs.abs_id 0 ctx in
+        comp cc (end_matching tracked_sids ctx)
+  in
+  end_matching initial_sids ctx
+
 let drop_value (config : config) (span : Meta.span) (p : place) : cm_fun =
  fun ctx ->
   log#ltrace
@@ -34,7 +72,7 @@ let drop_value (config : config) (span : Meta.span) (p : place) : cm_fun =
   (* Prepare the place (by ending the outer loans *at* the place). *)
   let v, ctx, cc = comp2 cc (prepare_lplace config span p ctx) in
   (* Replace the value with {!Bottom} *)
-  let ctx =
+  let mv, ctx =
     (* Move the value at destination (that we will overwrite) to a dummy variable
      * to preserve the borrows it may contain *)
     let _, mv = InterpPaths.read_place span access p ctx in
@@ -46,7 +84,16 @@ let drop_value (config : config) (span : Meta.span) (p : place) : cm_fun =
     [%ltrace
       "place: " ^ place_to_string ctx p ^ "\n- Final context:\n"
       ^ eval_ctx_to_string ~span:(Some span) ctx];
-    ctx
+    (mv, ctx)
+  in
+  let ctx, cc =
+    if !Config.stateful_lifetimes then
+      let ids, _ = compute_tvalue_ids mv in
+      let ctx, cc =
+        comp cc (end_abstractions_referencing_sids config span ids.sids ctx)
+      in
+      comp cc (InterpBorrows.simplify_dummy_values_useless_abs config span ctx)
+    else (ctx, cc)
   in
   (* Compose and apply *)
   (ctx, cc)
@@ -1625,9 +1672,43 @@ and eval_function_call_symbolic_from_inst_sig (config : config)
   in
   (* Actually initialize and insert the abstractions *)
   let region_can_end _ = true in
+  let regions_hierarchy =
+    RegionsHierarchy.compute_regions_hierarchy_for_sig (Some span) ctx.crate
+      call_info.call_sig
+  in
+  let region_group_is_stateful (rg_id : RegionGroupId.id) =
+    if not !Config.stateful_lifetimes then false
+    else
+      match
+        List.find_opt
+          (fun (group : region_var_group) -> group.id = rg_id)
+          regions_hierarchy
+      with
+      | None -> false
+      | Some group ->
+          let flags =
+            List.map
+              (fun rid ->
+                Option.value
+                  (Option.map
+                     (fun (region : region_param) -> region.stateful)
+                     (List.find_opt
+                        (fun (region : region_param) -> region.index = rid)
+                        call_info.call_sig.item_binder_params.regions))
+                  ~default:false)
+              group.regions
+          in
+          if List.exists (fun flag -> flag) flags then (
+            [%cassert] span
+              (List.for_all (fun flag -> flag) flags)
+              "Stateful and non-stateful lifetimes were merged into the same \
+               region group";
+            true)
+          else false
+  in
   let ctx =
     create_push_abstractions_from_abs_region_groups
-      (fun rg_id -> FunCall (call_id, rg_id))
+      (fun rg_id -> FunCall (call_id, rg_id, region_group_is_stateful rg_id))
       inst_sg.abs_regions_hierarchy region_can_end compute_abs_avalues ctx
   in
   (* Synthesize the symbolic AST *)
