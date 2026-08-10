@@ -4,6 +4,7 @@ import Aeneas.Extract
 import AeneasMeta.BvEnumToBitVec
 import Aeneas.Data.Coinductive.ITree
 import Aeneas.Data.Coinductive.Effect
+import Aeneas.Std.Effects
 
 namespace Aeneas
 
@@ -50,16 +51,6 @@ def elabImpl : CommandElab := fun (stx: Syntax) => do
 /-!
 # Results and Monadic Combinators
 -/
-
-inductive Error where
-   | assertionFailure: Error
-   | integerOverflow: Error
-   | divisionByZero: Error
-   | arrayOutOfBounds: Error
-   | maximumSizeExceeded: Error
-   | panic: Error
-   | undef: Error
-deriving Repr, BEq
 
 open Error
 
