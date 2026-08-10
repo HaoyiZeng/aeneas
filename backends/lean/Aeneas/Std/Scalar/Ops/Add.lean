@@ -39,7 +39,7 @@ theorem UScalar.add_equiv {ty} (x y : UScalar ty) :
   | .ok z => x.val + y.val < 2^ty.numBits ∧
     z.val = x.val + y.val ∧
     z.bv = x.bv + y.bv
-  | .vis (.fail _) _ => ¬ (UScalar.inBounds ty (x.val + y.val))
+  | .vis (RustEffect.fail _) _ => ¬ (UScalar.inBounds ty (x.val + y.val))
   | _ => ⊥ := by
   have : x + y = add x y := by rfl
   rw [this]
@@ -58,7 +58,7 @@ theorem IScalar.add_equiv {ty} (x y : IScalar ty) :
     IScalar.inBounds ty (x.val + y.val) ∧
     z.val = x.val + y.val ∧
     z.bv = x.bv + y.bv
-  | .vis (.fail _) _ => ¬ (IScalar.inBounds ty (x.val + y.val))
+  | .vis (RustEffect.fail _) _ => ¬ (IScalar.inBounds ty (x.val + y.val))
   | _ => ⊥ := by
   have : x + y = add x y := by rfl
   rw [this]

@@ -615,7 +615,7 @@ theorem UScalar.tryMkOpt_eq (ty : UScalarTy) (x : Nat) :
 theorem UScalar.tryMk_eq (ty : UScalarTy) (x : Nat) :
   match (tryMk ty x).match with
     | .ok y => y.val = x ∧ inBounds ty x
-    | .vis (.fail _e) _k => ¬ (inBounds ty x)
+    | .vis (RustEffect.fail _e) _k => ¬ (inBounds ty x)
     | _ => False
   := by
   have := UScalar.tryMkOpt_eq ty x
@@ -638,7 +638,7 @@ theorem IScalar.tryMkOpt_eq (ty : IScalarTy) (x : Int) :
 theorem IScalar.tryMk_eq (ty : IScalarTy) (x : Int) :
   match (tryMk ty x).match with
   | .ok y => y.val = x ∧ inBounds ty x
-  | .vis (.fail _e) _k => ¬ (inBounds ty x)
+  | .vis (RustEffect.fail _e) _k => ¬ (inBounds ty x)
   | _ => False
   := by
   have := tryMkOpt_eq ty x

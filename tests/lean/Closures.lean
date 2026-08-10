@@ -21,9 +21,13 @@ namespace closures
     Source: '/rustc/library/core/src/iter/traits/iterator.rs', lines 831:4-834:34
     Name pattern: [core::iter::traits::iterator::Iterator::map]
     Visibility: public -/
+-- HAND-PATCHED (universe): `F` is instantiated with a closure type
+-- `BuiltinFnMut U8 U8 = U8 → Result U8`, which mentions `Result` and so lives in
+-- `Type 1`. The generated binder `{F : Type}` is too narrow for it. This patch is
+-- lost on regeneration; a selective binder-widening in the extractor is the real fix.
 @[trait_default, rust_fun "core::iter::traits::iterator::Iterator::map"]
-axiom core.iter.traits.iterator.Iterator.map.default
-  {Self : Type} {B : Type} {F : Type} {Clause0_Item : Type} (IteratorInst :
+axiom core.iter.traits.iterator.Iterator.map.default.{u}
+  {Self : Type} {B : Type} {F : Type u} {Clause0_Item : Type} (IteratorInst :
   core.iter.traits.iterator.Iterator Self Clause0_Item)
   (opsfunctionFnMutFTupleClause0_ItemBInst : core.ops.function.FnMut F
   Clause0_Item B) :
@@ -348,12 +352,15 @@ def u8_id (x : Std.U8) : Result Std.U8 := do
 
 /-- [closures::map_fn_pointer]:
     Source: 'tests/src/closures.rs', lines 47:0-49:1 -/
-def map_fn_pointer (x : alloc.vec.Vec Std.U8) : Result Unit := do
-  let ii ← alloc.vec.IntoIteratorVec.into_iter x
-  let _ ←
-    core.iter.traits.iterator.Iterator.map.default
+-- HAND-PATCHED (universe): written with explicit `bind` rather than `do`. The
+-- `Monad Result` instance fixes a single value universe per `do` block, which would
+-- force `F := Type 0`; `bind` is `{α : Type u} {β : Type v}` and so lets the closure
+-- type `U8 → Result U8 : Type 1` through.
+def map_fn_pointer (x : alloc.vec.Vec Std.U8) : Result Unit :=
+  Std.bind (alloc.vec.IntoIteratorVec.into_iter x) fun ii =>
+  Std.bind (core.iter.traits.iterator.Iterator.map.default
       (core.iter.traits.iterator.IteratorVecIntoIter Std.U8) (BuiltinFnMut
-      Std.U8 Std.U8) ii (u8_id)
+      Std.U8 Std.U8) ii (u8_id)) fun _ =>
   ok ()
 
 end closures

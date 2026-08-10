@@ -865,14 +865,15 @@ instance Result.instWP : WP Result.{u} (.except (ULift Error) (.except PUnit (.e
       | .ok a => Q.1 a
       | .vis eff _ =>
         match eff with
-        | .fail e => Q.2.1 (ULift.up e)
+        | RustEffect.fail e => Q.2.1 (ULift.up e)
         | _ => Q.2.2.1 PUnit.unit
       | .div => Q.2.2.2.1 .unit
     conjunctiveRaw Q₁ Q₂ := by
       apply SPred.bientails.of_eq
       cases x <;> simp
-      try (rename_i i k)
-      try (cases i <;> simp)
+      -- `split` case-splits the `match` itself, so this is insensitive to how
+      -- many summands `RustEffect` has.
+      try (split <;> simp)
   }
 set_option match.ignoreUnusedAlts false
 

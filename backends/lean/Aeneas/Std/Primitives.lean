@@ -54,30 +54,53 @@ def elabImpl : CommandElab := fun (stx: Syntax) => do
 
 open Error
 
-inductive RustEffect.I : Type where
-| fail : Error → RustEffect.I
+/-- The effects a translated Rust program may perform.
 
-def RustEffect.O (i : RustEffect.I) : Type :=
-  match i with
-  | .fail _ => PEmpty
+Aeneas only ever *emits* `fail`; the other summands are what lets a program
+logic give meaning to code the extractor cannot see through — a spawned thread,
+a lock acquisition, a load from shared memory. A program that never visits such
+a node is unaffected by their presence.
 
-def RustEffect : Effect := {
-  I := RustEffect.I
-  O := RustEffect.O
-}
+The heap makes this an `Effect.{u+1}`: it stores values of arbitrary `Type u`
+types, so its value type packs a type as data, and packing is what adds a
+universe. `Result` therefore stops being universe-preserving. Rust *data* types
+do not mention `Result` and stay at `Type u`; trait dictionaries and closure
+types do mention it and move up with it. -/
+def RustEffect : Effect.{1} :=
+  FailE ⊕ₑ ConcE ⊕ₑ StepE ⊕ₑ StateE RustHeap.{0}
+
+/-- Where `fail` sits in the sum.
+
+Not redundant with the generic instances in `Coinductive.Effect`: those match a
+syntactic `⊕ₑ`, and `RustEffect` is a `def`, which instance search will not
+unfold. -/
+instance : FailE.{1} -< RustEffect :=
+  inferInstanceAs (FailE.{1} -< (FailE.{1} ⊕ₑ _))
 
 -- We need Result to be irreducble outside this file (to not break metaprograms which normalize types),
 -- but reducible within. The `unseal` command only affects the local scope.
 @[irreducible]
-def Result (α : Type u) : Type u := ITree RustEffect α
+def Result (α : Type v) : Type (max v 1) := ITree RustEffect α
 unseal Result
 
 def Result.ok {α} (a : α) : Result α := .ret a
 
-def Result.vis {α} (eff : RustEffect.I) (k : RustEffect.O eff → Result α) : Result α := ITree.vis eff k
+def Result.vis {α : Type v} (eff : RustEffect.I)
+    (k : RustEffect.O eff → Result α) : Result α := ITree.vis eff k
+
+/-- The `fail` operation as an index of the full effect.
+
+Spelled out rather than routed through the `-<` instance so that it stays a
+literal `Sum.inl`: every `simp` lemma about `fail` then matches syntactically.
+`match_pattern` lets it appear on the left of a `match`, which is what the
+`| .vis (RustEffect.fail e) _` arms in the standard library rely on — the bare
+`.fail` they used to write no longer resolves, since `RustEffect.I` now unfolds
+to `Sum`. -/
+@[match_pattern] abbrev RustEffect.fail (e : Error) : RustEffect.I :=
+  Sum.inl (FailE.I.fail e)
 
 @[simp, grind .]
-def Result.fail {α} (e : Error) : Result α := Result.vis (.fail e) PEmpty.elim
+def Result.fail {α} (e : Error) : Result α := Result.vis (RustEffect.fail e) PEmpty.elim
 
 def Result.div {α} : Result α := ITree.div
 
@@ -119,7 +142,7 @@ def Result.cases {R}
     (div :  motive (Result.div))
     : motive t := ITree.cases ret div vis t
 
-inductive MatchResult (α : Type u) : Type u where
+inductive MatchResult (α : Type v) : Type (max v 1) where
 | ok : (a : α) → MatchResult α
 | div : MatchResult α
 | vis : (eff : RustEffect.I) → (RustEffect.O eff → Result α) → MatchResult α
@@ -150,7 +173,7 @@ theorem Result.match.is_vis {α : Type u} {e k} {r : Result α} : (r.match = .vi
 theorem Result.match.is_div {α : Type u} {r : Result α} : (r.match = .div) ↔ r = .div := by
   cases r <;> grind
 
-def Result.is_ok {R : Type} [BEq R] (r : Result R) (expected : R) : Bool :=
+def Result.is_ok {R : Type v} [BEq R] (r : Result R) (expected : R) : Bool :=
   match r.match with
   | .ok x => x == expected
   | _ => false
@@ -194,7 +217,6 @@ def Result.ofOption {a : Type u} (x : Option a) (e : Error) : Result a :=
 --      contradiction
 @[simp] theorem bind_vis (e k) (f : α → Result β) : bind (.vis e k) f = .vis e (fun x => bind (k x) f) :=
   by simp [bind, vis]
-     rfl
 
 @[simp] theorem bind_div (f : α → Result β) : bind .div f = .div := by simp [bind, div]
 
@@ -204,7 +226,6 @@ def Result.ofOption {a : Type u} (x : Option a) (e : Error) : Result a :=
 @[simp] theorem bind_tc_vis (e k) (f : α → Result β) :
   (do let y ← Result.vis e k; f y) = .vis e (fun x => do let y ← k x; f y) := by
   simp [bind, Bind.bind, vis]
-  rfl
 
 @[simp] theorem bind_tc_div (f : α → Result β) :
   (do let y ← div; f y) = div := by simp [bind, Bind.bind, div]

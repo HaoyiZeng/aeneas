@@ -52,7 +52,7 @@ variable {E : Effect} [RustEffect -< E] {Hd : Handler E GF} [inH (failH GF) Hd]
 /-- `fail` as a program: trigger the event, then eliminate its impossible
 answer. Its return type is arbitrary — the event never returns. -/
 def fail {α : Type _} (e : Error) : ITree E α :=
-  ITree.bind (Effect.trigger RustEffect (RustEffect.I.fail e)) (fun o => PEmpty.elim o)
+  ITree.bind (Effect.trigger RustEffect (RustEffect.fail e)) (fun o => PEmpty.elim o)
 
 /-- `wpi_fail`. Reaching a `fail` refutes the precondition — the goal it leaves
 is `False` under a mask change, and closing it means showing the failing branch
@@ -62,7 +62,7 @@ theorem wpi_fail {α : Type _} (e : Error) (Φ : Post GF α) (M : CoPset) :
     iprop(|={M, ∅}=> False) ⊢ wpi_mask GF Hd (fail (E := E) e) Φ M := by
   simp only [fail]
   refine .trans ?_ (wpi_bind (H := Hd) _ _ Φ M)
-  refine .trans ?_ (wpi_trigger' (H' := failH GF) (RustEffect.I.fail e) _ M)
+  refine .trans ?_ (wpi_trigger' (H' := failH GF) (RustEffect.fail e) _ M)
   /- The handler is `False` whatever the continuations are, so the premise is
   already in the required shape. -/
   simp only [failH, failH.run]

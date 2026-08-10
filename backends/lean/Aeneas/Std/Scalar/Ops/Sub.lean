@@ -42,7 +42,7 @@ theorem UScalar.sub_equiv {ty} (x y : UScalar ty) :
     y.val ≤ x.val ∧
     x.val = z.val + y.val ∧
     z.bv = x.bv - y.bv
-  | .vis (.fail _) _ => x.val < y.val
+  | .vis (RustEffect.fail _) _ => x.val < y.val
   | _ => ⊥ := by
   have : x - y = sub x y := by rfl
   simp [this, sub]
@@ -86,7 +86,7 @@ theorem IScalar.sub_equiv {ty} (x y : IScalar ty) :
     IScalar.inBounds ty (x.val - y.val) ∧
     z.val = x.val - y.val ∧
     z.bv = x.bv - y.bv
-  | .vis (.fail _) _ => ¬ (IScalar.inBounds ty (x.val - y.val))
+  | .vis (RustEffect.fail _) _ => ¬ (IScalar.inBounds ty (x.val - y.val))
   | _ => ⊥ := by
   have : x - y = sub x y := by rfl
   simp [this, sub]

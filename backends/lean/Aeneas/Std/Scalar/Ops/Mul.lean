@@ -42,7 +42,7 @@ Theorems with a specification which use integers and bit-vectors
 theorem UScalar.mul_equiv {ty} (x y : UScalar ty) :
   match (mul x y).match with
   | .ok z => x.val * y.val ≤ UScalar.max ty ∧ (↑z : Nat) = ↑x * ↑y ∧ z.bv = x.bv * y.bv
-  | .vis (.fail _) _ => UScalar.max ty < x.val * y.val
+  | .vis (RustEffect.fail _) _ => UScalar.max ty < x.val * y.val
   | _ => False := by
   simp only [mul]
   have := tryMk_eq ty (x.val * y.val)
@@ -70,7 +70,7 @@ theorem UScalar.mul_bv_spec {ty} {x y : UScalar ty}
 theorem IScalar.mul_equiv {ty} (x y : IScalar ty) :
   match (mul x y).match with
   | .ok z => IScalar.min ty ≤ x.val * y.val ∧ x.val * y.val ≤ IScalar.max ty ∧ z.val = x.val * y.val ∧ z.bv = x.bv * y.bv
-  | .vis (.fail _) _ => ¬(IScalar.min ty ≤ x.val * y.val ∧ x.val * y.val ≤ IScalar.max ty)
+  | .vis (RustEffect.fail _) _ => ¬(IScalar.min ty ≤ x.val * y.val ∧ x.val * y.val ≤ IScalar.max ty)
   | _ => False := by
   simp only [mul, not_and, not_le]
   have := tryMk_eq ty (x.val * y.val)
