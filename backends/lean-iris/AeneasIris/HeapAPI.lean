@@ -144,6 +144,22 @@ theorem wpi_faa [Add Val.{u}] (l : Loc) (v n : Val.{u}) (Φ : Post GF Val.{u}) (
   imodintro
   iapply (Heap.wpi_faa (Hd := Hd) l v n Φ M) $$ HΦ'
 
+/-- `wpi_alloc`: a fresh cell, at a location the client does not get to choose.
+
+The premise quantifies over `l` because allocation picks it; what comes back is
+full ownership of a cell that no one else can already hold. -/
+theorem wpi_alloc (v : Val.{u}) (Φ : Post GF Loc) (M : CoPset) :
+    lat m iprop(∀ l, l ↦ v -∗ |={M}=> Φ l)
+      ⊢ wpi_mask GF Hd (alloc (E := E) v) Φ M := by
+  simp only [alloc]
+  refine .trans ?_ (wpi_bind (H := Hd) step _ Φ M)
+  refine .trans ?_ (wpi_step (E := E) (m := m) (Hd := Hd) _ M)
+  iintro HΦ
+  iapply lat_mono m _ _ $$ [] HΦ
+  iintro HΦ'
+  imodintro
+  iapply (Heap.wpi_alloc (Hd := Hd) v Φ M) $$ HΦ'
+
 end
 
 end AeneasIris.HeapAPI

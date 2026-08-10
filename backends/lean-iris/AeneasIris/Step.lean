@@ -64,12 +64,21 @@ theorem lat_mono (m : LaterModality) (P Q : IProp GF) :
     inext
     iexact Hw
 
+/-- `lat_mono` in entailment form.
+
+The wand version is what the proof mode wants; this one is what a `refine`
+chain wants, where the two sides differ only under the modality. -/
+theorem lat_mono' (m : LaterModality) {P Q : IProp GF} (h : P ⊢ Q) :
+    lat m P ⊢ lat m Q := by
+  cases m
+  · simpa only [lat_identity] using h
+  · simpa only [lat_later] using BI.later_mono h
+
 /-- Anything can be delayed. -/
 theorem lat_intro (m : LaterModality) (P : IProp GF) : P ⊢ lat m P := by
   cases m
   · simp only [lat_identity]; exact .rfl
   · simp only [lat_later]; exact BI.later_intro
-
 end Lat
 
 /-! ## The handler -/

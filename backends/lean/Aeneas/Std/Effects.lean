@@ -168,6 +168,30 @@ def Val : Type (u + 1) := (T : Type u) × T
 /-- Pack a value, remembering its type. -/
 abbrev Val.pack {T : Type u} (x : T) : Val.{u} := ⟨T, x⟩
 
+/-- Read a packed value back at an expected type, or `default` if it was stored
+at a different one.
+
+`noncomputable` because equality of types is not decidable. That is not a
+restriction in practice: only hand-written models touch the heap, and the rules
+in the program logic never reach the `default` branch — a points-to assertion
+fixes the type of the cell, so the projection at that type always succeeds. -/
+noncomputable def Val.unpack (T : Type u) [Inhabited T] (v : Val.{u}) : T :=
+  open Classical in
+  if h : v.1 = T then h ▸ v.2 else default
+
+/-- Packing and reading back at the same type is the identity. This is the whole
+point of storing the type alongside the value. -/
+@[simp] theorem Val.unpack_pack (T : Type u) [Inhabited T] (x : T) :
+    Val.unpack T (Val.pack x) = x := by
+  simp [Val.unpack]
+
+/-- Reading back at a *different* type recovers nothing. Stated so that the
+absence of a `Val.unpack (Val.pack x) = x` for mismatched types is visible
+rather than merely unprovable. -/
+theorem Val.unpack_pack_ne {T U : Type u} [Inhabited U] (x : T) (h : T ≠ U) :
+    Val.unpack U (Val.pack x) = default := by
+  simp [Val.unpack, h]
+
 /-- Needed so that a read from an absent location has something to return. -/
 instance : Inhabited Val.{u} := ⟨Val.pack PUnit.unit⟩
 
