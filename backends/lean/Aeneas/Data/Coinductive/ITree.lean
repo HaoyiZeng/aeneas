@@ -275,7 +275,15 @@ theorem vis_bind i k (t : S → ITree E R) :
   (.vis i k) >>= t = .vis i (λ o => k o >>= t) := by simp [Bind.bind]
 
 
-def Effect.trigger (E₁ : Effect.{u}) {E₂ : Effect.{u}} [E₁ -< E₂] (i : E₁.I) : ITree.{u} E₂ (E₁.O i) :=
+/-- Perform an operation of a sub-effect.
+
+`E₁` and `E₂` may live in *different* universes: `Subeffect` already allows it,
+and `ITree.{v,u}` keeps the value universe separate from the effect universe.
+This matters because the small effects (failure, concurrency, stepping) are
+genuinely finite and belong in `Type 0`, while a heap effect sits at whatever
+universe its values do — without this, one of them would have to be `ULift`ed. -/
+def Effect.trigger (E₁ : Effect.{u}) {E₂ : Effect.{v}} [E₁ -< E₂] (i : E₁.I) :
+    ITree.{u, v} E₂ (E₁.O i) :=
   let ⟨i₂, f⟩ := (Subeffect.map i);
   ITree.vis i₂ (λ x => return (f x))
 

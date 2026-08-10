@@ -80,3 +80,14 @@ nohup.out
 */.#*
 *.smt2
 .DS_Store
+
+# Lean / Lake
+# Applied repo-wide rather than per package: `backends/lean/.gitignore` and
+# `tests/lean/.gitignore` only cover the packages that existed when they were
+# written, so every new Lake package silently reintroduced ~700MB of artifacts.
+.lake/
+build/
+lake-packages/
+*.olean
+*.ilean
+*.trace

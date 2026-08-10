@@ -1,3 +1,4 @@
+import Std.Data.ExtTreeMap
 import Aeneas.Data.Coinductive.ITree
 import Aeneas.Data.Coinductive.Effect
 
@@ -126,5 +127,57 @@ def StateE.O : StateE.I S → Type u
 
 def StateE : Effect.{u} := ⟨StateE.I S, StateE.O S⟩
 end
+
+/-! ## The heap
+
+The state a translated Rust program threads. Only the *type* is here: the
+operations, the handler and the reasoning rules need Iris and live in
+`AeneasIris.Heap`. `RustEffect` mentions this type, which is why it cannot stay
+on the Iris side.
+
+Aeneas is a shallow embedding — a Rust type becomes a real Lean type — so a
+shared cell holds a value of an arbitrary Lean type and different cells hold
+different ones. `Val` therefore pairs a type with an inhabitant of it. That
+pairing is the sole reason the heap sits one universe above its payload:
+function types take `max`, only packing a type as data adds one.
+
+Consequently a value whose type mentions `Result` can never be stored, at any
+universe: `Result` is one level above the payload, and raising the payload
+raises `Result` with it. Rust *data* types do not mention `Result` and are
+storable; closures and trait dictionaries are not. -/
+
+/-- Locations. -/
+abbrev Loc := Nat
+
+/-- Whether a cell is being written, or read by `n` readers.
+
+The states and transitions are λRust's (`lambda-rust/lang/lang.v`), where a
+data race is a configuration in which no rule applies — the program is stuck,
+and a weakest precondition implies progress. -/
+inductive AccessState where
+  | writing
+  | reading (n : Nat)
+deriving DecidableEq
+
+/-- A cell: its concurrency state and its value. -/
+abbrev Cell (V : Type u) : Type u := AccessState × V
+
+/-- A dynamically typed value: a type together with an inhabitant of it. -/
+def Val : Type (u + 1) := (T : Type u) × T
+
+/-- Pack a value, remembering its type. -/
+abbrev Val.pack {T : Type u} (x : T) : Val.{u} := ⟨T, x⟩
+
+/-- Needed so that a read from an absent location has something to return. -/
+instance : Inhabited Val.{u} := ⟨Val.pack PUnit.unit⟩
+
+/-- The heap.
+
+`Std.ExtTreeMap` is Lean's own, so naming it here costs no new dependency; the
+`LawfulFiniteMap` instance the reasoning needs is supplied on the Iris side
+(`Iris/Std/HeapInstances.lean`). -/
+abbrev HMap (V : Type u) : Type u := Std.ExtTreeMap Loc V compare
+
+abbrev RustHeap : Type (u + 1) := HMap (Cell Val.{u})
 
 end Aeneas.Std
