@@ -74,6 +74,19 @@ theorem lat_mono' (m : LaterModality) {P Q : IProp GF} (h : P ⊢ Q) :
   · simpa only [lat_identity] using h
   · simpa only [lat_later] using BI.later_mono h
 
+/-- `step` at an arbitrary value universe.
+
+`step` is `Unit`-valued, and `Unit` is in `Type 0`. A `do` block fixes a single
+value universe, so a block that also carries a `Val.{u}` — which is in
+`Type (u+1)`, because it packs a type as data — cannot bind an ordinary `step`.
+`PUnit` is universe-polymorphic, so this version can be raised to meet whatever
+the rest of the block needs, and the block stays in `do` notation.
+
+The `ITree.bind` here is the one place the universes are crossed; everything
+downstream is uniform. -/
+def stepP.{v, w} {E : Effect.{w}} [StepE -< E] : ITree E PUnit.{v+1} :=
+  ITree.bind step fun _ => ITree.ret PUnit.unit
+
 /-- Anything can be delayed. -/
 theorem lat_intro (m : LaterModality) (P : IProp GF) : P ⊢ lat m P := by
   cases m
@@ -132,6 +145,15 @@ theorem wpi_step (Φ : Post GF Unit) (M : CoPset) :
   imod HΦ' with HΦ'
   imodintro
   iexact HΦ'
+
+/-- `wpi_stepP`. Same rule as `wpi_step`, at whatever value universe the
+surrounding `do` block is at. -/
+theorem wpi_stepP (Φ : Post GF PUnit.{v+1}) (M : CoPset) :
+    lat m iprop(|={M}=> Φ PUnit.unit) ⊢ wpi_mask GF Hd (stepP.{v, _} (E := E)) Φ M := by
+  simp only [stepP]
+  refine .trans ?_ (wpi_bind (H := Hd) step _ Φ M)
+  refine .trans ?_ (wpi_step (m := m) (Hd := Hd) _ M)
+  exact lat_mono' m (BIFUpdate.mono (wpi_ret PUnit.unit Φ M))
 
 end Rule
 

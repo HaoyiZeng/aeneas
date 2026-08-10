@@ -238,6 +238,18 @@ def load_at (l : Loc) : ITree E Val.{u} :=
     | some (.reading _, _) => some σ
     | _ => none) (valAt l)
 
+/-- Atomic read, projected at an expected type.
+
+Not `load_at` followed by a projection: `act'` post-composes a pure read-off, so
+folding `Val.unpack` into that read-off costs nothing and keeps the result in
+`Type u`. That is what lets the API layer stay in `do` notation — a `Val` would
+have dragged the whole block up a universe. -/
+noncomputable def load_atT (T : Type u) [Inhabited T] (l : Loc) : ITree E T :=
+  act' (S := RustHeap.{u}) (fun σ =>
+    match get? σ l with
+    | some (.reading _, _) => some σ
+    | _ => none) (fun σ => Val.unpack T (valAt l σ))
+
 def store_at (l : Loc) (v : Val.{u}) : ITree E Unit :=
   act' (S := RustHeap.{u}) (fun σ =>
     match get? σ l with
@@ -274,13 +286,28 @@ def cas [DecidableEq Val.{u}] (l : Loc) (old new : Val.{u}) : ITree E Bool :=
       | some (_, v) => v = old
       | none => false)
 
-/-- Fetch-and-add, for the reference counts of `Arc` and the reader count of a
-reader-writer lock. Like `cas`, a single `modify`. -/
-def faa [Add Val.{u}] (l : Loc) (n : Val.{u}) : ITree E Val.{u} :=
+/-- Atomic read-modify-write: replace the cell's contents by `f` of them and
+return the *old* value. A single event, like `cas`.
+
+This is deliberately more general than fetch-and-add, because fetch-and-add
+cannot be stated here at all: adding two `Val`s would need an `Add` instance for
+the type held in the cell, and `Val` carries the type but not its instances. The
+typed layer recovers `faa` by projecting first, which puts the `Add` on `T`
+where it is available. -/
+def modify (f : Val.{u} → Val.{u}) (l : Loc) : ITree E Val.{u} :=
   act' (S := RustHeap.{u}) (fun σ =>
     match get? σ l with
-    | some (.reading 0, v) => some (insert σ l (.reading 0, v + n))
+    | some (.reading 0, v) => some (insert σ l (.reading 0, f v))
     | _ => none) (valAt l)
+
+/-- Atomic read-modify-write at a type: apply `f` to the cell's contents and
+return the old value. This is what makes fetch-and-add expressible — `Add` lands
+on `T`, where it exists, rather than on `Val`, where it cannot. -/
+noncomputable def modifyT (T : Type u) [Inhabited T] (f : T → T) (l : Loc) : ITree E T :=
+  act' (S := RustHeap.{u}) (fun σ =>
+    match get? σ l with
+    | some (.reading 0, v) => some (insert σ l (.reading 0, Val.pack (f (Val.unpack T v))))
+    | _ => none) (fun σ => Val.unpack T (valAt l σ))
 
 /-- Allocation is a single event: no other thread can observe a half-built cell.
 The location is `fresh` of the *pre*-state, which is why no freshness
@@ -499,6 +526,17 @@ theorem wpi_load_at (l : Loc) (n : Nat) (v : Val.{u}) (dq : DFrac) (Φ : Post GF
   wpi_cell_ro l _ v dq _ (valAt l) v Φ M
     (fun _ h => by simp only [h]) (fun _ h => valAt_of_get h)
 
+/-- `wpi_load_atT`. As `wpi_load_at`, with the projection folded in: the
+points-to fixes the cell's type, so `Val.unpack_pack` applies and the read-off is
+the identity. -/
+theorem wpi_load_atT (T : Type u) [Inhabited T] (l : Loc) (n : Nat) (v : T) (dq : DFrac)
+    (Φ : Post GF T) (M : CoPset) :
+    iprop(l ↦[AccessState.reading n]{dq} Val.pack v ∗
+      (l ↦[AccessState.reading n]{dq} Val.pack v -∗ |={M}=> Φ v))
+      ⊢ wpi_mask GF Hd (load_atT T l) Φ M :=
+  wpi_cell_ro l _ (Val.pack v) dq _ (fun σ => Val.unpack T (valAt l σ)) v Φ M
+    (fun _ h => by simp only [h]) (fun _ h => by simp only [valAt_of_get h, Val.unpack_pack])
+
 /-- `wpi_store_at` (λRust `WriteScS`). An atomic write demands an idle cell:
 any non-atomic reader in flight would be a race. -/
 theorem wpi_store_at (l : Loc) (v w : Val.{u}) (Φ : Post GF Unit) (M : CoPset) :
@@ -642,15 +680,28 @@ theorem wpi_cas_fail [DecidableEq Val.{u}] (l : Loc) (n : Nat) (v old new : Val.
     (fun _ h => by cases n <;> simp only [h] <;> simp [hne])
     (fun _ h => by simp only [h]; simp [hne])
 
-/-- `wpi_faa`. Fetch-and-add returns the *old* value; it is one event, which is
+/-- `wpi_modify`. An atomic read-modify-write returns the *old* value; it is one event, which is
 why it needs no second read. -/
-theorem wpi_faa [Add Val.{u}] (l : Loc) (v n : Val.{u}) (Φ : Post GF Val.{u}) (M : CoPset) :
+theorem wpi_modify (f : Val.{u} → Val.{u}) (l : Loc) (v : Val.{u})
+    (Φ : Post GF Val.{u}) (M : CoPset) :
     iprop(l ↦[AccessState.reading 0] v ∗
-      (l ↦[AccessState.reading 0] (v + n) -∗ |={M}=> Φ v))
-      ⊢ wpi_mask GF Hd (faa l n) Φ M := by
-  simp only [faa]
-  refine wpi_cell_upd l _ _ v (v + n) _ (valAt l) v Φ M
+      (l ↦[AccessState.reading 0] (f v) -∗ |={M}=> Φ v))
+      ⊢ wpi_mask GF Hd (modify f l) Φ M := by
+  simp only [modify]
+  refine wpi_cell_upd l _ _ v (f v) _ (valAt l) v Φ M
     (fun _ h => by simp only [h]) (fun _ h => valAt_of_get h)
+
+/-- `wpi_modifyT`. An atomic read-modify-write at a type returns the old value
+and installs `f` of it. -/
+theorem wpi_modifyT (T : Type u) [Inhabited T] (f : T → T) (l : Loc) (v : T)
+    (Φ : Post GF T) (M : CoPset) :
+    iprop(l ↦[AccessState.reading 0] Val.pack v ∗
+      (l ↦[AccessState.reading 0] Val.pack (f v) -∗ |={M}=> Φ v))
+      ⊢ wpi_mask GF Hd (modifyT T f l) Φ M :=
+  wpi_cell_upd l _ _ (Val.pack v) (Val.pack (f v)) _
+    (fun σ => Val.unpack T (valAt l σ)) v Φ M
+    (fun _ h => by simp only [h, Val.unpack_pack])
+    (fun _ h => by simp only [valAt_of_get h, Val.unpack_pack])
 
 /-! ### Allocation and deallocation -/
 

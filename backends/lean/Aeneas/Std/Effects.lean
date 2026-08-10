@@ -195,6 +195,16 @@ theorem Val.unpack_pack_ne {T U : Type u} [Inhabited U] (x : T) (h : T ≠ U) :
 /-- Needed so that a read from an absent location has something to return. -/
 instance : Inhabited Val.{u} := ⟨Val.pack PUnit.unit⟩
 
+/-- Comparing two `Val`s means comparing their *types* first, and equality of
+types is not decidable. The instance is therefore classical, and `noncomputable`
+like `Val.unpack`.
+
+The semantics are the intended ones: `⟨T, x⟩ = ⟨U, y⟩` holds exactly when the
+types agree and the values do. A compare-and-swap against a cell holding a
+different type fails, which is what it should do. -/
+noncomputable instance : DecidableEq Val.{u} :=
+  fun a b => Classical.propDecidable (a = b)
+
 /-- The heap.
 
 `Std.ExtTreeMap` is Lean's own, so naming it here costs no new dependency; the
