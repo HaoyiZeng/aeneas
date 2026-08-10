@@ -537,7 +537,23 @@ def tryMatch (info : SpecInfo) (lifting : Option LiftingInfo) (isLet : Bool) (th
   let specMonoBind ← mkAppOptM' specMonoBind (specMonoBindMVars.map some)
   trace[Step] "Uninstantiated specMonoBind: {specMonoBind}: {← inferType specMonoBind}"
 
-  let specMonoBind := mkAppN specMonoBind #[program, P, th]
+  /- Apply the program and the post-condition first, then *unify* the expected
+     type of the next argument with the type of the step theorem before applying
+     it. `mkAppN` performs no unification, so without this any metavariable of
+     `th` that is not determined by `program` and `P` — a precondition, or a
+     universe level introduced by a lifting — is left unassigned, and the
+     resulting proof term is rejected by the kernel with the unhelpful
+     "declaration has metavariables". -/
+  let specMonoBind := mkAppN specMonoBind #[program, P]
+  match ← whnf (← inferType specMonoBind) with
+  | .forallE _ expectedThTy _ _ =>
+    let thTy ← inferType th
+    trace[Step] "Unifying step theorem type:\n- expected: {expectedThTy}\n- actual: {thTy}"
+    unless ← isDefEq expectedThTy thTy do
+      throwError "The step theorem does not have the expected type:\n\
+        - expected: {expectedThTy}\n- actual: {thTy}"
+  | _ => pure ()
+  let specMonoBind := mkAppN specMonoBind #[th]
   let specMonoBindTy ← inferType specMonoBind
   trace[Step] "Applied specMonoBind with theorem: {specMonoBind}: {specMonoBindTy}"
 
