@@ -21,4 +21,10 @@ require iris from "../../../iris-lean/Iris"
 
 package «aeneas-iris» where
 
-@[default_target] lean_lib «AeneasIris» {}
+/-- Glob every submodule rather than just the `AeneasIris` root.
+
+With the default glob, `lake build` builds the root and whatever it transitively
+imports, so a file the root does not import is silently never built and reports
+no errors. `Arc`, `RwLock` and `Test` were all in that state. -/
+@[default_target] lean_lib «AeneasIris» where
+  globs := #[.andSubmodules `AeneasIris]
