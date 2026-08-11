@@ -44,25 +44,26 @@ structure Context where
   m : Expr
   /-- The element type `α`. -/
   expectedAlpha : Expr
-  /-- Instance of `Bind m` -/
-  bindInst : Expr
-  /-- Instance of `Pure m` -/
-  pureInst : Expr
 
 abbrev ElabM := ReaderT Context $ ContT Expr TermElabM
 
-/-- Split `m α` and synthesize the `Bind m` and `Pure m` instances. -/
-def mkContext (expectedType : Expr) : TermElabM Context := do
-  let expectedType ← whnf expectedType
-  let (m, α) ← match expectedType with
-    | Expr.app m α => pure (m, α)
-    | _ => throwError "expected a monadic type `m α`, got {indentExpr expectedType}"
-  let bindInst ← synthInstance (← mkAppM ``Bind #[m])
-  let pureInst ← synthInstance (← mkAppM ``Pure #[m])
-  return { m, expectedAlpha := α, bindInst, pureInst }
+/-- Split `m α`.
 
-def ElabM.mkBind (e k : Expr) : ElabM Expr := do
-  let _ctx ← read
+Reduce at *reducible* transparency only. `Result` is `irreducible`, but a file
+may `unseal Aeneas.Std.Result` to reason about the underlying `ITree`, which
+makes it semireducible — and `whnf` would then unfold it past `ITree` (an
+`abbrev`) all the way to `CoInd`. The head would no longer be `Result`, the
+dispatch below would decline the block, and Lean would silently fall back to its
+builtin `do`, producing `Bind.bind`/`match_1` terms that `step` cannot see
+through. `whnfR` still unfolds `abbrev` aliases of `Result`, which is what we
+do want. -/
+def mkContext (expectedType : Expr) : TermElabM Context := do
+  let expectedType ← whnfR expectedType
+  match expectedType with
+  | Expr.app m α => pure { m, expectedAlpha := α }
+  | _ => throwError "expected a monadic type `m α`, got {indentExpr expectedType}"
+
+def ElabM.mkBind (e k : Expr) : ElabM Expr :=
   mkAppM ``_root_.Aeneas.Std.bind #[e, k]
 
 /-- Build `m α`. -/
@@ -565,7 +566,7 @@ register_option Aeneas.customDoElab : Bool := {
 def elabDo : TermElab := fun stx expectedType? => do
   let useNewElab ← do
     let some expectedType := expectedType? | pure false
-    let expectedType ← instantiateMVars =<< whnf expectedType
+    let expectedType ← instantiateMVars =<< whnfR expectedType
     match_expr expectedType with
     | Aeneas.Std.Result _ => pure (Aeneas.customDoElab.get (← getOptions))
     | _ => pure false
