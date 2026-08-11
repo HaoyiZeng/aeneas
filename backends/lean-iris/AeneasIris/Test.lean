@@ -1,31 +1,41 @@
-import AeneasIris.ISpec
-import AeneasIris.Concurrency
-import AeneasIris.Fail
-import Aeneas.Tactic.Step.Step
+import AeneasIris.Tactics
 
 /-!
 # Tests
 
-1. **`iSpec` is the proof-mode goal.** Not up to a lemma — up to `rfl`.
-2. **The lifting composes.** An Aeneas `⦃⦄` lemma is used inside a `wpi` proof
-   without restating it, and the caller's resources survive the call.
+The two things this development has to do at once, on one goal:
 
-Heap regressions live separately; they are parked while `AeneasIris.HeapRules`
-grows the `yield` between the two phases of a non-atomic access.
+* replay Aeneas' `⦃⦄` lemmas on pure calls, without restating them, and
+* apply the handler rules to operations that touch the heap,
+
+with a frame that neither of them disturbs.
+
+The handler is `rustH .later` throughout: the modality has to be concrete for
+`lat` to reduce, and `.later` is the one that makes Löb induction available.
 -/
 
 namespace AeneasIris.Test
 
 open Iris BI Aeneas.Data.Coinductive
-open AeneasIris
-open Aeneas.Std (Result RustEffect)
+open AeneasIris AeneasIris.HeapAPI AeneasIris.Heap
+open scoped AeneasIris
+open scoped Aeneas
+open AeneasIris.RustHandler (rustH)
+open Aeneas.Std (Result RustEffect Loc Slice U32 Usize)
+open Aeneas.Std.alloc.vec (Vec)
 
 unseal Aeneas.Std.Result
 
-section StepOnISpec
+section
 
-variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF]
-variable {H : Handler RustEffect GF}
+variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF] [HeapGS.{0} GF]
+
+/-- The handler these tests run under: partial correctness, so that every
+operation issues a `▷` and Löb induction is available. -/
+abbrev RH (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF] [HeapGS.{0} GF] :
+    Handler RustEffect GF := rustH .later
+
+
 
 /-- A stand-in for a translated Rust function, with an Aeneas-style spec. -/
 def twice (n : Nat) : Result Nat := .ok (2 * n)
@@ -34,140 +44,206 @@ def twice (n : Nat) : Result Nat := .ok (2 * n)
 theorem twice_spec (n : Nat) : Aeneas.Std.WP.spec (twice n) (fun r => r = 2 * n) :=
   .ret _ _ rfl
 
+/-! ## Pure calls -/
+
 /-- The lifting on its own. -/
-example (n : Nat) (M : CoPset) :
-    iSpecT H (twice n) (fun v => iprop(⌜v = 2 * n⌝)) M :=
-  spec_to_iSpecT (twice_spec n)
+example (n : Nat) (H : Handler RustEffect GF) (P : IProp GF) (M : CoPset) :
+    iSpec H P (twice n) (fun v => iprop(⌜v = 2 * n⌝ ∧ P)) M :=
+  spec_to_iSpec (twice_spec n)
 
-/-- **The point of the whole exercise.** Two calls to an Aeneas function,
-sequenced with `do`. `step` recognises the `Bind.bind`, finds `twice_spec` in
-the `@[step]` database, lifts it through `spec_to_iSpecT`, and applies
-`iSpecT_bind'` — the `⦃⦄` lemma is reused, not restated. -/
-example (n : Nat) (M : CoPset) :
-    iSpecT H (do let a ← twice n; let b ← twice a; pure b) (λ _ => iprop(True ∗ True)) M := by
-  step
-  step
-  simp
+/-- Two calls in a row, sequenced with `do`, from the empty precondition.
+
+`step` recognises the `Bind.bind`, finds `twice_spec` in the `@[step]`
+database, lifts it through `spec_to_iSpec` and applies `iSpec_bind'`. This is
+the `EmpValid` shape — the goal `⊢ …` is *definitionally* `emp ⊢ …`, and the
+one judgment covers it. -/
+example (n : Nat) (H : Handler RustEffect GF) (M : CoPset) :
+    ⊢ WP (do let a ← twice n; twice a : Result Nat) @ H ; M ⦃ v, (⌜v = 4 * n⌝ : IProp GF) ⦄ := by
   iintro
-  imodintro
-  itrivial
-
-/-! ### The same, at an arbitrary signature
-
-`iSpecT` is what a mixed program needs: the handler is over some `E` that merely
-*contains* `RustEffect`, so the very same Aeneas `⦃⦄` lemmas remain reusable
-next to rules for effects Aeneas knows nothing about. -/
-
-section Poly
-
-variable {E : Effect} [RustEffect -< E] {HE : Handler E GF}
-
-example (n : Nat) (M : CoPset) :
-    iSpecT HE (twice n) (fun v => iprop(⌜v = 2 * n⌝)) M :=
-  spec_to_iSpecT (twice_spec n)
-
-example (n : Nat) (M : CoPset) :
-    iSpecT HE (do let a ← twice n; let b ← twice a; pure b)
-      (λ _ => iprop(True ∗ True)) M := by
-  step
-  step
-  simp
-  iintro
-  imodintro
-  itrivial
-
-end Poly
-
-end StepOnISpec
-
-/-! ## A concrete mixed signature
-
-`EE` is what a real client assembles: the effects Aeneas emits, plus the ones
-only the program logic knows about. `RustEffect -< EE` is what `iSpecT` asks
-for, so every Aeneas `⦃⦄` lemma stays available; `ConcE -< EE` is what the
-concurrency rules ask for. Neither side had to be told about the other. -/
-
-section Mixed
-
-open Aeneas.Std (ConcE)
-open AeneasIris.ConcE (ConcH yield wpi_yield spawn wpi_spawn)
-open AeneasIris.Fail (failH)
-
-abbrev EE : Effect := RustEffect ⊕ₑ ConcE
-
-variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF]
-
-abbrev HEE (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF] : Handler EE GF :=
-  failH GF ⊕ₕ ConcH GF
-
-/-- Aeneas code alone, but under the *combined* handler. -/
-example (n : Nat) (M : CoPset) :
-    iSpecT (HEE GF) (twice n) (fun v => iprop(⌜v = 2 * n⌝)) M :=
-  spec_to_iSpecT (twice_spec n)
-
-/-- Aeneas, then a `yield`, then Aeneas again.
-
-The program is an `ITree EE`, so the goal is a bare `wpi_mask`, not an
-`iSpecT`. `wpi_bind` peels off the leading Aeneas block; the residual goal is
-*definitionally* an `iSpecT`, which is what lets `step` fire on it and reuse
-`twice_spec`. -/
-example (n : Nat) :
-    ⊢ wpi_mask GF (HEE GF)
-        (do let a ← ITree.translate (twice n)
-            yield
-            let b ← ITree.translate (twice a)
-            pure b)
-        (fun v => iprop(⌜v = 4 * n⌝)) ⊤ := by
-  step_aeneas
-  /- The `yield`: a rule the Aeneas backend knows nothing about, applied to the
-  same goal, under the same handler. -/
-  refine .trans ?_ (wpi_bind (H := HEE GF) _ _ _ _)
-  refine .trans ?_ (wpi_yield (H := HEE GF) GF _)
-  /- Back to Aeneas, and `step` again. -/
-  step_aeneas
-  refine .trans ?_ (wpi_ret (H := HEE GF) _ _ _)
-  exact BI.pure_intro (by simp [*]; ring)
-
-/-- `spawn`, whose child thread is itself Aeneas code.
-
-The forked tree is an `ITree EE` obligation discharged the same way — peel with
-`wpi_bind`, `show` it is an `iSpecT`, `step`. Nothing about the child being a
-*thread* changes how the Aeneas lemma is used. -/
-example (n : Nat) :
-    ⊢ wpi_mask GF (HEE GF)
-        (do spawn (do let _ ← ITree.translate (twice n); pure ())
-            let b ← ITree.translate (twice n)
-            pure b)
-        (fun v => iprop(⌜v = 2 * n⌝)) ⊤ := by
-  refine .trans ?_ (wpi_bind (H := HEE GF) _ _ _ _)
-  refine .trans ?_ (wpi_spawn (H := HEE GF) GF _ _ _)
-  refine BI.emp_sep.2.trans (BI.sep_mono ?_ ?_)
-  · /- The parent continues: Aeneas again. -/
-    step_aeneas
-    refine .trans ?_ (wpi_ret (H := HEE GF) _ _ _)
-    exact BI.pure_intro (by simp [*])
-  · /- The child thread. -/
-    step_aeneas
-    refine .trans ?_ (wpi_ret (H := HEE GF) _ _ _)
-    exact BI.pure_intro trivial
-
-/-! ### With a non-trivial Iris precondition
-
-The shape the user actually wants: `{P} t {Q}` with `P` a real separation-logic
-assertion, `iintro`'d into the spatial context, and `istep` consuming the
-Aeneas calls while `P` is framed across them untouched. -/
-
-example (n : Nat) (Pr : IProp GF) :
-    Pr ⊢ wpi_mask GF (HEE GF)
-      (ITree.translate ((do let a ← twice n; twice a : Result Nat)))
-      (fun v => iprop(⌜v = 4 * n⌝ ∧ Pr)) ⊤ := by
   istep
   istep
-  iintro HP
+  ipureintro
+  simp [*]; ring
+
+/-- The same, with a non-trivial precondition, which must come out untouched. -/
+example (n : Nat) (H : Handler RustEffect GF) (R : IProp GF) (M : CoPset) :
+    R ⊢ WP (do let a ← twice n; twice a : Result Nat) @ H ; M ⦃ v, ⌜v = 4 * n⌝ ∧ R ⦄ := by
+  istep
+  istep
+  iintro HR
   isplit
   · ipureintro; simp [*]; ring
-  · iexact HP
+  · iexact HR
 
-end Mixed
+/-! ## Heap operations -/
+
+example (l : Loc) (M : CoPset) :
+    (iprop(l ↦ (1 : Nat)) : IProp GF) ⊢
+      WP (do let _ ← store (E := RustEffect) l (2 : Nat)
+             load (T := Nat) l : Result Nat) @ (RH GF) ; M ⦃ v, ⌜v = 2⌝ ⦄ := by
+  iintro Hl
+  iheap (store (E := RustEffect) l (2 : Nat))
+    with (wpi_store (E := RustEffect) (Hd := RH GF) (m := .later)
+            l (1 : Nat) (2 : Nat)) using Hl
+  iintro Hl
+  imodintro
+  iheap! (wpi_load (Hd := RH GF) (m := .later) l (2 : Nat) (DFrac.own 1)) using Hl
+  iintro _
+  imodintro
+  itrivial
+
+/-! ## The point: both kinds of step, with a frame
+
+A pure Aeneas call, a heap write, another pure call, a heap read — and a frame
+`R` that no step is allowed to disturb.
+
+`istep` never sees the heap and `iheap` never sees the `@[step]` database. The
+two automations do not know about each other, and neither of them threads `R`:
+it simply stays in the proof-mode context, which is the whole reason the heap
+rules are applied by hand rather than registered. -/
+
+example (l : Loc) (n : Nat) (R : IProp GF) (M : CoPset) :
+    iprop(l ↦ (0 : Nat) ∗ R) ⊢
+      WP (do let a ← twice n
+             let _ ← store (E := RustEffect) l a
+             let b ← twice a
+             load (T := Nat) l : Result Nat) @ (RH GF) ; M ⦃ v, ⌜v = 2 * n⌝ ∗ R ⦄ := by
+  iintro ⟨Hl, HR⟩
+  istep as ⟨a, ha⟩
+  iheap (store (E := RustEffect) l a)
+    with (wpi_store (E := RustEffect) (Hd := RH GF) (m := .later)
+            l (0 : Nat) a) using Hl
+  iintro Hl
+  imodintro
+  istep as ⟨b, hb⟩
+  iheap! (wpi_load (Hd := RH GF) (m := .later) l a (DFrac.own 1)) using Hl
+  iintro Hl
+  imodintro
+  isplitr [HR]
+  · ipureintro; simp [*]
+  · iexact HR
+
+/-! ## A real Aeneas function, verified through `iSpec`
+
+Nothing above uses a genuine standard-library lemma — `twice_spec` is a
+stand-in. This one is the actual thing: `swap` is written the way Aeneas emits
+code, and every step of its proof is a `⦃⦄` lemma from `Aeneas.Std`, found and
+applied by `step` with no restatement.
+
+Note the two arithmetic calls carry *preconditions* (`hbound`, `hmax`). `step`
+raises them as side goals exactly as it does for its own judgment. -/
+
+/-- Read two cells of a slice, add them, and write the sum back to the first —
+the shape of a translated Rust function. -/
+def addInto (s : Slice U32) (i j : Usize) : Result (Slice U32) := do
+  let a ← s.index_usize i
+  let b ← s.index_usize j
+  let c ← a + b
+  s.update i c
+
+theorem addInto_spec (s : Slice U32) (i j : Usize)
+    (hi : i.val < s.length) (hj : j.val < s.length)
+    (hmax : (s.val[i.val]!).val + (s.val[j.val]!).val ≤ U32.max) :
+    addInto s i j ⦃ ns => ns.val.length = s.val.length ⦄ := by
+  unfold addInto
+  step as ⟨a, ha⟩
+  step as ⟨b, hb⟩
+  step as ⟨c, hc⟩
+  · simp_lists [*] at *; scalar_tac
+  step as ⟨ns, hns⟩
+  simp [*]
+
+
+example (s : Slice U32) (i j : Usize) (R : IProp GF) (M : CoPset)
+    (hi : i.val < s.length) (hj : j.val < s.length)
+    (hmax : (s.val[i.val]!).val + (s.val[j.val]!).val ≤ U32.max) :
+    R -∗ WP (addInto s i j) @ (RH GF) ; M ⦃ ns, ⌜ns.val.length = s.val.length⌝ ∗ R ⦄ := by
+  iintro HR
+  unfold addInto
+  istep as ⟨a, ha⟩
+  istep as ⟨b, hb⟩
+  istep as ⟨c, hc⟩
+  · simp_lists [*] at *; scalar_tac
+  istep as ⟨ns, hns⟩
+  isplitr [HR]
+  · ipureintro; simp [*]
+  · iexact HR
+
+/-! ## A longer function, and a cell to put its answer in
+
+`pushSum` is six library calls: two indexings, an addition, a `Vec.push`, and
+the return. `cellDemo` allocates a cell holding `0`, runs it, writes the answer
+into the cell and reads it back.
+
+The two halves are automated by different things and neither knows about the
+other: `istep` replays the five `⦃⦄` lemmas, the heap rules are applied by hand,
+and the points-to that `alloc` produces survives the pure calls in between. -/
+
+/-- Add the first two elements of a vector and append the sum. -/
+def pushSum (v : Vec U32) : Result (Vec U32 × U32) := do
+  let a ← v.index_usize 0#usize
+  let b ← v.index_usize 1#usize
+  let c ← a + b
+  let v1 ← v.push c
+  Result.ok (v1, c)
+
+@[step]
+theorem pushSum_spec (v : Vec U32) (h0 : 0 < v.val.length) (h1 : 1 < v.val.length)
+    (hlen : v.val.length < Usize.max)
+    (hmax : (v.val[0]!).val + (v.val[1]!).val ≤ U32.max) :
+    pushSum v ⦃ (nv, c) => c.val = (v.val[0]!).val + (v.val[1]!).val ⦄ := by
+  unfold pushSum
+  step as ⟨a, ha⟩
+  step as ⟨b, hb⟩
+  step as ⟨c, hc⟩
+  · simp_lists [*] at *; scalar_tac
+  step as ⟨v1, hv1⟩
+  simp_lists [*] at *
+
+/-- Allocate a cell holding `0`, run `pushSum`, write its answer into the cell,
+and read it back. -/
+noncomputable def cellDemo (v : Vec U32) : Result (Loc × U32) := do
+  let l ← HeapAPI.alloc (0#u32)
+  let (_, c) ← pushSum v
+  let _ ← store l c
+  let r ← load (T := U32) l
+  Result.ok (l, r)
+
+/-- The whole thing: the value read back is the sum, and the caller is handed
+the cell that holds it.
+
+Nothing is assumed to start with — the points-to in the postcondition is one
+`alloc` created. It then has to survive four pure library calls, which is the
+part neither automation is aware of: `istep` does not know the heap exists, and
+the heap rules do not know about the `@[step]` database. -/
+example (v : Vec U32) (M : CoPset)
+    (h0 : 0 < v.val.length) (h1 : 1 < v.val.length)
+    (hlen : v.val.length < Usize.max)
+    (hmax : (v.val[0]!).val + (v.val[1]!).val ≤ U32.max) :
+    (emp : IProp GF) ⊢ WP (cellDemo v) @ (RH GF) ; M
+      ⦃ lr, ⌜(lr.2).val = (v.val[0]!).val + (v.val[1]!).val⌝ ∗ lr.1 ↦ lr.2 ⦄ := by
+  iintro _
+  unfold cellDemo
+  ibind (HeapAPI.alloc (E := RustEffect) (T := U32) _)
+  iapply (wpi_alloc (Hd := RH GF) (m := .later) (T := U32) _)
+  ilat
+  inext
+  iintro %l Hl
+  imodintro
+  istep as ⟨p, hp⟩
+  iheap (store (E := RustEffect) l p.2)
+    with (wpi_store (E := RustEffect) (Hd := RH GF) (m := .later) l (0#u32) p.2) using Hl
+  iintro Hl
+  imodintro
+  iheap (HeapAPI.load (E := RustEffect) (T := U32) l)
+    with (wpi_load (Hd := RH GF) (m := .later) l p.2 (DFrac.own 1)) using Hl
+  iintro Hl
+  imodintro
+  iapply (wpi_ret_result (H := RH GF) (l, p.2) _ M)
+  isplitr [Hl]
+  · ipureintro; exact hp
+  · iexact Hl
+
+end
 
 end AeneasIris.Test

@@ -107,6 +107,45 @@ instance inH_stateH (m : LaterModality) :
   inferInstanceAs (stateH heapInterp.{0} -<ₕ
     (failH GF ⊕ₕ ConcH.{1} GF ⊕ₕ stepH.{1} GF m ⊕ₕ stateH heapInterp.{0}))
 
+/-! ## The ambient handler
+
+A development runs under one handler, and repeating it on every specification
+says nothing. `Ambient` is what the `⦃ ⦄` notation reads it from.
+
+The four `-<ₕ` constraints are *fields* rather than being left to instance
+search. They have to be: search is keyed on the head symbol, and once the
+handler is reached through `Ambient.handler` the instances proved above — which
+are keyed on `rustH` — no longer match. Carrying them along means registering
+one instance gives the rules everything they need.
+
+The modality is a field for the same reason: `stepH GF ?m -<ₕ Ambient.handler`
+has nothing to determine `?m` from otherwise. -/
+
+class Ambient {hlc : Iris.HasLC} (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
+    [HeapGS.{0} GF] where
+  m : LaterModality
+  handler : Handler RustEffect GF
+  [failIn : failH GF -<ₕ handler]
+  [concIn : ConcH.{1} GF -<ₕ handler]
+  [stepIn : stepH.{1} GF m -<ₕ handler]
+  [stateIn : stateH heapInterp.{0} -<ₕ handler]
+
+attribute [instance] Ambient.failIn Ambient.concIn Ambient.stepIn Ambient.stateIn
+
+/-- The ambient handler, with the binders the notation needs.
+
+The projection itself takes `hlc` explicitly, which no call site wants to
+supply. -/
+abbrev ambientH {hlc : Iris.HasLC} {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF]
+    [HeapGS.{0} GF] [Ambient (hlc := hlc) GF] : Handler RustEffect GF :=
+  Ambient.handler hlc
+
+/-- Partial correctness: every operation's step issues a `▷`, which is what
+makes Löb induction available. -/
+instance ambientLater : Ambient (hlc := hlc) GF where
+  m := .later
+  handler := rustH .later
+
 /-! ## The rules, at the concrete handler
 
 The `inH` instances above are only evidence that the *constraints* are
