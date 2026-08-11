@@ -5,6 +5,9 @@ import AeneasIris.Fail
 import AeneasIris.Step
 import AeneasIris.Heap
 import AeneasIris.HeapAPI
+import AeneasIris.RwLock
+import AeneasIris.Arc
 import AeneasIris.RustHandler
 import AeneasIris.ISpec
 import AeneasIris.Tactics
+import AeneasIris.Test
