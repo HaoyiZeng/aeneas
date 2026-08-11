@@ -8,11 +8,17 @@ open Aeneas.Std (StateE StepE Loc Val RustHeap)
 open scoped Aeneas.Std
 open AeneasIris.Step (lat LaterModality stepH)
 
+/-- Model of `my_std::Arc<T>`.
+
+The payload is a *cell*, not a field. `Arc<T>` is a shared pointer: every clone
+must observe the same `T`, so storing it by value would give each clone its own
+copy and lose the only property the type exists for -- `Arc<RwLock<Node>>` would
+hand out unrelated locks. -/
 structure Handle (T : Type) where
   strong : Loc
   weak : Loc
-  data : T
-deriving DecidableEq
+  data : Loc
+deriving DecidableEq, Repr
 
 inductive WeakHandle (T : Type)
   | dangling
@@ -27,9 +33,19 @@ variable {T : Type} [Nonempty T]
 noncomputable def new (x : T) : ITree E (Handle T) := do
   let s ← alloc (1 : Int)
   let w ← alloc (1 : Int)
-  return ⟨s, w, x⟩
+  let d ← alloc x
+  return ⟨s, w, d⟩
 
-def deref (a : Handle T) : T := a.data
+/-- `Deref for Arc`.
+
+A heap read, not a projection -- which is what makes the sharing observable, and
+what the generated signature `Arc T -> Result T` already says. -/
+noncomputable def deref (a : Handle T) : ITree E T :=
+  load a.data
+
+/-- `Arc::strong_count`. -/
+noncomputable def strong_count (a : Handle T) : ITree E Int :=
+  load a.strong
 
 noncomputable def clone (a : Handle T) : ITree E (Handle T) := do
   let _ ← faa a.strong (1 : Int)
@@ -39,9 +55,15 @@ noncomputable def downgrade (a : Handle T) : ITree E (WeakHandle T) := do
   let _ ← faa a.weak (1 : Int)
   return .live a
 
+/-- Releasing one strong reference. The payload is freed by the last one to
+leave; the two counter cells outlive it and go when the last weak does. -/
 noncomputable def dropStrong (a : Handle T) : ITree E Bool := do
   let old : Int ← faa a.strong (-1)
-  return old = 1
+  if old = 1 then
+    let _ ← HeapAPI.free a.data
+    return true
+  else
+    return false
 
 def weakNew : WeakHandle T := .dangling
 
