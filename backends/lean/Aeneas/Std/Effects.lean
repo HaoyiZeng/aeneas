@@ -168,29 +168,31 @@ def Val : Type (u + 1) := (T : Type u) × T
 /-- Pack a value, remembering its type. -/
 abbrev Val.pack {T : Type u} (x : T) : Val.{u} := ⟨T, x⟩
 
-/-- Read a packed value back at an expected type, or `default` if it was stored
-at a different one.
+/-- Read a packed value back at an expected type.
 
-`noncomputable` because equality of types is not decidable. That is not a
-restriction in practice: only hand-written models touch the heap, and the rules
-in the program logic never reach the `default` branch — a points-to assertion
-fixes the type of the cell, so the projection at that type always succeeds. -/
-noncomputable def Val.unpack (T : Type u) [Inhabited T] (v : Val.{u}) : T :=
+`Nonempty` rather than `Inhabited`: the function has to be total, so it must
+return *something* when the cell holds another type, but nothing depends on
+*what*. `Nonempty` is a `Prop`, is implied by `Inhabited`, and follows from any
+witness at all — `⟨⟨t⟩⟩` for a one-field structure — which matters because
+Aeneas generates no `Inhabited` instances for translated types.
+
+`noncomputable` because equality of types is not decidable. Neither that nor the
+arbitrary branch is a restriction in practice: only hand-written models touch the
+heap, and the heap operations are *stuck* on a type mismatch, so no rule ever
+reaches it. -/
+noncomputable def Val.unpack (T : Type u) [Nonempty T] (v : Val.{u}) : T :=
   open Classical in
-  if h : v.1 = T then h ▸ v.2 else default
+  if h : v.1 = T then h ▸ v.2 else Classical.choice inferInstance
 
 /-- Packing and reading back at the same type is the identity. This is the whole
 point of storing the type alongside the value. -/
-@[simp] theorem Val.unpack_pack (T : Type u) [Inhabited T] (x : T) :
+@[simp] theorem Val.unpack_pack (T : Type u) [Nonempty T] (x : T) :
     Val.unpack T (Val.pack x) = x := by
   simp [Val.unpack]
 
-/-- Reading back at a *different* type recovers nothing. Stated so that the
-absence of a `Val.unpack (Val.pack x) = x` for mismatched types is visible
-rather than merely unprovable. -/
-theorem Val.unpack_pack_ne {T U : Type u} [Inhabited U] (x : T) (h : T ≠ U) :
-    Val.unpack U (Val.pack x) = default := by
-  simp [Val.unpack, h]
+/-- The type a `Val` was packed at is recoverable, which is what lets the heap
+operations refuse a mismatched access rather than reinterpret it. -/
+@[simp] theorem Val.fst_pack {T : Type u} (x : T) : (Val.pack x).1 = T := rfl
 
 /-- Needed so that a read from an absent location has something to return. -/
 instance : Inhabited Val.{u} := ⟨Val.pack PUnit.unit⟩
@@ -201,9 +203,17 @@ like `Val.unpack`.
 
 The semantics are the intended ones: `⟨T, x⟩ = ⟨U, y⟩` holds exactly when the
 types agree and the values do. A compare-and-swap against a cell holding a
-different type fails, which is what it should do. -/
-noncomputable instance : DecidableEq Val.{u} :=
+different type fails, which is what it should do.
+
+`scoped`, so that it reaches only files that ask for it (`open scoped
+Aeneas.Std`). A global classical instance would be visible to every module in the
+package and could silently make an unrelated definition `noncomputable`. -/
+noncomputable scoped instance : DecidableEq Val.{u} :=
   fun a b => Classical.propDecidable (a = b)
+
+/-- Whether a `Val` was packed at a given type. Classical for the same reason. -/
+noncomputable scoped instance (T : Type u) (v : Val.{u}) : Decidable (v.1 = T) :=
+  Classical.propDecidable _
 
 /-- The heap.
 

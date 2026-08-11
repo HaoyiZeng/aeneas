@@ -21,7 +21,8 @@ so that other effect libraries can mention them in `do` blocks, following
 (`src/threadpool/handler.v`). -/
 
 /-- The only point at which control may pass to another thread. -/
-def yield {E : Effect.{v}} [ConcE -< E] : ITree E Unit := Effect.trigger ConcE .yield
+def yield {E : Effect.{v}} [ConcE.{v} -< E] : ITree E PUnit.{v+1} :=
+  Effect.trigger ConcE.{v} .yield
 
 /-! ## The handler
 
@@ -80,8 +81,8 @@ any handler built with `⊕ₕ`. -/
 
 section ConcRules
 
-variable {E : Effect} {H : Handler E GF} [Sub : ConcE -< E]
-variable [I : inH (ConcH GF) H]
+variable {E : Effect.{v}} {H : Handler E GF} [Sub : ConcE.{v} -< E]
+variable [I : ConcH GF -<ₕ H]
 
 
 /-- `wpi_yield`.
@@ -90,17 +91,17 @@ The mask must be **full**. This is what forbids stepping over a yield with an
 invariant open, and is the exact analogue of the atomicity side condition on
 Iris' invariant-opening rule: between two yields another thread may run, so any
 invariant must have been restored. -/
-theorem wpi_yield (Φ : Post GF Unit) :
-    iprop(Φ ()) ⊢ wpi_mask GF H (yield (E := E)) Φ ⊤ := by
+theorem wpi_yield (Φ : Post GF PUnit.{v+1}) :
+    iprop(Φ PUnit.unit) ⊢ wpi_mask GF H (yield (E := E)) Φ ⊤ := by
   simp only [yield]
   /- `E'` and `Sub` are pinned: left implicit, instance search fires while `E'`
   is still a metavariable and diverges. -/
-  refine .trans ?_ (wpi_trigger (H := H) (E' := ConcE) (Sub := Sub)
+  refine .trans ?_ (wpi_trigger (H := H) (E' := ConcE.{v}) (Sub := Sub)
     ConcE.I.yield Φ ⊤ (ConcH GF) (fun Ψ B => inH.embed (H₁ := ConcH GF) (H₂ := H) ConcE.I.yield Ψ B))
   /- The handler demands `🧱`, i.e. close every invariant and reopen: two nested
   mask changes, each an instance of mask introduction. -/
   have intro_mask := Iris.fupd_mask_intro_subseteq (PROP := IProp GF)
-    (E1 := ⊤) (E2 := ∅) (P := iprop(Φ ())) Iris.Std.LawfulSet.empty_subset
+    (E1 := ⊤) (E2 := ∅) (P := iprop(Φ PUnit.unit)) Iris.Std.LawfulSet.empty_subset
   exact intro_mask.trans (BIFUpdate.mono (BIFUpdate.mono intro_mask))
 
 /-- `wpi_kill`: ending a thread proves anything.
@@ -154,14 +155,16 @@ theorem wpi_fork (kt : ConcE.O .fork → ITree E α)
 This is the derived operation a client writes; `fork` is the primitive. The new
 thread ends with `endthread`, which is what makes its postcondition `False`
 dischargeable — it never returns. -/
-def spawn {E : Effect} [ConcE -< E] (t : ITree E Unit) : ITree E Unit := do
-  let tag ← Effect.trigger ConcE .fork
-  match tag with
-  | .cur => pure ()
-  | .new => do
-      let _ ← t
-      let _ ← Effect.trigger ConcE .endthread
-      pure ()
+/- `ITree.bind` rather than `do`: `fork` answers with `ConcE.Tags.{v}`, which is
+in `Type v`, while the spawned thread is `Unit`-valued, and a `do` block admits
+only one value universe. -/
+def spawn {E : Effect.{v}} [ConcE.{v} -< E] (t : ITree E Unit) : ITree E Unit :=
+  ITree.bind (Effect.trigger ConcE.{v} .fork) fun tag =>
+    match tag with
+    | .cur => ITree.ret ()
+    | .new =>
+        ITree.bind t fun _ =>
+          ITree.bind (Effect.trigger ConcE.{v} .endthread) (fun o => PEmpty.elim o)
 
 /-- `wpi_spawn`.
 

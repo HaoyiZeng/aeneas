@@ -28,9 +28,15 @@ open AeneasIris
 
 -- The signature is `Aeneas.Std.StepE`; only the handler below needs Iris.
 
-/-- Mark that a step has been taken.  The semantic analogue of `▷`. -/
-def step {E : Effect} [StepE -< E] : ITree E Unit :=
-  Effect.trigger StepE .step
+/-- Mark that a step has been taken.  The semantic analogue of `▷`.
+
+`StepE` is at `E`'s universe, not at `0`. `Effect.trigger` is cross-universe, so
+`StepE.{0} -< E` would typecheck — but `⊕ₑ` is *homogeneous*, so a signature
+that also carries the heap has its `StepE` summand at the heap's universe, and
+`StepE.{0} -< that sum` has no instance. Pinning the two together is what lets
+the rule below be used at a concrete handler. -/
+def step.{u} {E : Effect.{u}} [StepE.{u} -< E] : ITree E PUnit.{u+1} :=
+  Effect.trigger StepE.{u} .step
 
 /-! ## The choice of modality -/
 
@@ -84,7 +90,7 @@ the rest of the block needs, and the block stays in `do` notation.
 
 The `ITree.bind` here is the one place the universes are crossed; everything
 downstream is uniform. -/
-def stepP.{v, w} {E : Effect.{w}} [StepE -< E] : ITree E PUnit.{v+1} :=
+def stepP.{v, w} {E : Effect.{w}} [StepE.{w} -< E] : ITree E PUnit.{v+1} :=
   ITree.bind step fun _ => ITree.ret PUnit.unit
 
 /-- Anything can be delayed. -/
@@ -100,12 +106,15 @@ section Handler
 
 variable (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
 
-def stepH.run (m : LaterModality) (i : StepE.I) (Ψ _Ψs : StepE.O i → IProp GF) :
+/- `PUnit.unit`, not `()`: `StepE.O .step` is `PUnit.{u+1}`, and writing `()`
+would fix `u := 0`. `RustEffect` needs the `StepE` summand at the universe of
+the heap, so the handler has to be available there too. -/
+def stepH.run.{u} (m : LaterModality) (i : StepE.I.{u}) (Ψ _Ψs : StepE.O i → IProp GF) :
     IProp GF :=
   match i with
-  | .step => lat m (Ψ ())
+  | .step => lat m (Ψ PUnit.unit)
 
-def stepH (m : LaterModality) : Handler StepE GF where
+def stepH.{u} (m : LaterModality) : Handler StepE.{u} GF where
   run := stepH.run GF m
   mono := by
     intro i Ψ Ψ' Ψs Ψs'
@@ -127,11 +136,11 @@ way round would need the closing wand underneath a `▷`. -/
 section Rule
 
 variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF]
-variable {E : Effect} [StepE -< E] {Hd : Handler E GF} {m : LaterModality}
-variable [inH (stepH GF m) Hd]
+variable {E : Effect.{w}} [StepE.{w} -< E] {Hd : Handler E GF} {m : LaterModality}
+variable [stepH GF m -<ₕ Hd]
 
-theorem wpi_step (Φ : Post GF Unit) (M : CoPset) :
-    lat m iprop(|={M}=> Φ ()) ⊢ wpi_mask GF Hd (step (E := E)) Φ M := by
+theorem wpi_step (Φ : Post GF PUnit.{w+1}) (M : CoPset) :
+    lat m iprop(|={M}=> Φ PUnit.unit) ⊢ wpi_mask GF Hd (step (E := E)) Φ M := by
   simp only [step]
   refine .trans ?_ (wpi_trigger (H := Hd) (E' := StepE) StepE.I.step Φ M
     (stepH GF m) (inH.embed _))
@@ -154,6 +163,14 @@ theorem wpi_stepP (Φ : Post GF PUnit.{v+1}) (M : CoPset) :
   refine .trans ?_ (wpi_bind (H := Hd) step _ Φ M)
   refine .trans ?_ (wpi_step (m := m) (Hd := Hd) _ M)
   exact lat_mono' m (BIFUpdate.mono (wpi_ret PUnit.unit Φ M))
+
+theorem wpi_stepThen {α : Type v} {P : IProp GF} (t : ITree E α) (Φ : Post GF α) (M : CoPset)
+    (h : P ⊢ wpi_mask GF Hd t Φ M) :
+    lat m P ⊢ wpi_mask GF Hd (do let _ ← stepP.{v, _}; t) Φ M := by
+  show _ ⊢ wpi_mask GF Hd (ITree.bind stepP fun _ => t) Φ M
+  refine .trans ?_ (wpi_bind (H := Hd) stepP _ Φ M)
+  refine .trans ?_ (wpi_stepP (m := m) (Hd := Hd) _ M)
+  exact lat_mono' m (h.trans Iris.fupd_intro)
 
 end Rule
 

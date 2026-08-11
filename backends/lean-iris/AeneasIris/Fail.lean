@@ -22,19 +22,24 @@ menu item, not a law — see the note at the end of this file for the alternativ
 namespace AeneasIris.Fail
 
 open Iris BI Aeneas.Data.Coinductive
-open Aeneas.Std (RustEffect Error)
+open Aeneas.Std (FailE RustEffect Error)
 open AeneasIris
 
 section Handler
 
 variable (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
 
-/-- Failure is unprovable. Note `RustEffect.O` is `PEmpty`, so both continuations are
-vacuous — a `fail` node has nothing after it. -/
-def failH.run (_i : RustEffect.I) (_Ψ _Ψs : RustEffect.O _i → IProp GF) : IProp GF :=
+/-- Failure is unprovable. Note `FailE.O` is `PEmpty`, so both continuations are
+vacuous — a `fail` node has nothing after it.
+
+The handler is for `FailE` alone, not for `RustEffect`: `RustEffect` is the sum
+of all four signatures, and a handler sending *every* one of its events to
+`False` would forbid the heap and concurrency operations too. It is the `⊕ₕ`
+assembly in `AeneasIris.RustHandler` that puts this one on the `fail` summand. -/
+def failH.run.{u} (_i : FailE.I.{u}) (_Ψ _Ψs : FailE.O _i → IProp GF) : IProp GF :=
   iprop(False)
 
-def failH : Handler RustEffect GF where
+def failH.{u} : Handler FailE.{u} GF where
   run := failH.run GF
   mono := by
     intro i Ψ Ψ' Ψs Ψs'
@@ -47,12 +52,12 @@ end Handler
 section Rules
 
 variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF]
-variable {E : Effect} [RustEffect -< E] {Hd : Handler E GF} [inH (failH GF) Hd]
+variable {E : Effect.{u}} [FailE.{u} -< E] {Hd : Handler E GF} [failH.{u} GF -<ₕ Hd]
 
 /-- `fail` as a program: trigger the event, then eliminate its impossible
 answer. Its return type is arbitrary — the event never returns. -/
 def fail {α : Type _} (e : Error) : ITree E α :=
-  ITree.bind (Effect.trigger RustEffect (RustEffect.fail e)) (fun o => PEmpty.elim o)
+  ITree.bind (Effect.trigger FailE.{u} (FailE.I.fail e)) (fun o => PEmpty.elim o)
 
 /-- `wpi_fail`. Reaching a `fail` refutes the precondition — the goal it leaves
 is `False` under a mask change, and closing it means showing the failing branch
@@ -62,7 +67,7 @@ theorem wpi_fail {α : Type _} (e : Error) (Φ : Post GF α) (M : CoPset) :
     iprop(|={M, ∅}=> False) ⊢ wpi_mask GF Hd (fail (E := E) e) Φ M := by
   simp only [fail]
   refine .trans ?_ (wpi_bind (H := Hd) _ _ Φ M)
-  refine .trans ?_ (wpi_trigger' (H' := failH GF) (RustEffect.fail e) _ M)
+  refine .trans ?_ (wpi_trigger' (H' := failH.{u} GF) (FailE.I.fail e) _ M)
   /- The handler is `False` whatever the continuations are, so the premise is
   already in the required shape. -/
   simp only [failH, failH.run]

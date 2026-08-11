@@ -49,7 +49,7 @@ infixr:30 " ⊕ₕ " => Handler.sum
 
 /-! ### `inH`: one handler sits inside another
 
-`inH H₁ H₂` says that on `E₁`-events, `H₂` does exactly what `H₁` does. This is
+`H₁ -<ₕ H₂` says that on `E₁`-events, `H₂` does exactly what `H₁` does. This is
 `handler.v`'s `inH`, and like there it is a **biconditional** — the reverse
 direction is what the effect-translation rules need — and a *class*, so that
 the instances below discharge it by structure rather than by hand. -/
@@ -70,10 +70,12 @@ class inH {GF : BundledGFunctors} {E₁ E₂ : Effect} [E₁ -< E₂]
                             (fun x => B (Subeffect.ans e x))
       ⊣⊢ H₁.run e Ψ B
 
+@[inherit_doc] notation:50 H₁:51 " -<ₕ " H₂:51 => inH H₁ H₂
+
 /-- The direction `wpi_trigger` consumes. -/
 theorem inH.embed {GF : BundledGFunctors} {E₁ E₂ : Effect} [E₁ -< E₂]
     {H₁ : Handler E₁ GF} {H₂ : Handler E₂ GF}
-    [I : inH H₁ H₂] (e : E₁.I) (Ψ B : E₁.O e → IProp GF) :
+    [I : H₁ -<ₕ H₂] (e : E₁.I) (Ψ B : E₁.O e → IProp GF) :
     H₁.run e Ψ B ⊢ H₂.run (Subeffect.ev e) (fun x => Ψ (Subeffect.ans e x))
                                            (fun x => B (Subeffect.ans e x)) :=
   (I.is_inH e Ψ B).mpr
@@ -84,13 +86,13 @@ instance inH_refl {GF : BundledGFunctors} {E : Effect} (H : Handler E GF) : inH 
 /-- Recursive, not a plain left injection: this is what lets a *nested* sum such
 as `FailE ⊕ₑ (StateE ⊕ₑ ConcE)` resolve. -/
 instance sumH_inH_l {GF : BundledGFunctors} {E₁ E₂ E₃ : Effect} [E₁ -< E₂]
-    (H₁ : Handler E₁ GF) (H₂ : Handler E₂ GF) (H₃ : Handler E₃ GF) [I : inH H₁ H₂] :
-    inH H₁ (H₂ ⊕ₕ H₃) where
+    (H₁ : Handler E₁ GF) (H₂ : Handler E₂ GF) (H₃ : Handler E₃ GF) [I : H₁ -<ₕ H₂] :
+    H₁ -<ₕ (H₂ ⊕ₕ H₃) where
   is_inH e Ψ B := I.is_inH e Ψ B
 
 instance sumH_inH_r {GF : BundledGFunctors} {E₁ E₂ E₃ : Effect} [E₁ -< E₃]
-    (H₁ : Handler E₁ GF) (H₂ : Handler E₂ GF) (H₃ : Handler E₃ GF) [I : inH H₁ H₃] :
-    inH H₁ (H₂ ⊕ₕ H₃) where
+    (H₁ : Handler E₁ GF) (H₂ : Handler E₂ GF) (H₃ : Handler E₃ GF) [I : H₁ -<ₕ H₃] :
+    H₁ -<ₕ (H₂ ⊕ₕ H₃) where
   is_inH e Ψ B := I.is_inH e Ψ B
 
 /-! ### `wandH`: one handler is stronger than another

@@ -5,4 +5,5 @@ import AeneasIris.Fail
 import AeneasIris.Step
 import AeneasIris.Heap
 import AeneasIris.HeapAPI
+import AeneasIris.RustHandler
 import AeneasIris.ISpec
