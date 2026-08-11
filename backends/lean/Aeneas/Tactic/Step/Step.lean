@@ -249,6 +249,8 @@ def getFirstBind (goalTy : Expr) : MetaM (Bool × Expr × SpecInfo) := do
   trace[Step] "bind?: {bind?}"
   if h: bind?.isConstOf ``bind ∧ args.size = 6
   then pure (true, args[4], info)
+  else if h: bind?.isConstOf ``_root_.Aeneas.Std.bind ∧ args.size = 4
+  then pure (true, args[2], info)
   else pure (false, compTy, info)
 
 /-- Names introduced by the `do` elaborator's `mkPatContinuation` as a
@@ -412,7 +414,7 @@ def getBindVarNames : TacticM (Array (Option Name)) := do
     let goalTy ← instantiateMVars goalTy
     forallTelescope goalTy fun _ goalTy => do
     let_expr Std.WP.spec _ m _ := goalTy | return #[]
-    let_expr Bind.bind _ _ _ _ _ cont := m | return #[]
+    let_expr Aeneas.Std.bind _ _ _ cont := m | return #[]
     getPostNames cont
   catch _ => pure #[]
 
@@ -1781,7 +1783,9 @@ info: example
           .ok ())
         .ok ()) ⦃ _ => True ⦄
       := by
+    rw [_root_.Aeneas.Std.Std.bind_assoc_eq]
     step
+    simp
 
   /- Checking the case where simplifying the goal after instantiating the
      pspec theorem actually solves it, and where the function is not a constant.

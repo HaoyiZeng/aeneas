@@ -235,6 +235,19 @@ def Result.ofOption {a : Type u} (x : Option a) (e : Error) : Result a :=
   (Bind.bind (Bind.bind e g) h) =
   (Bind.bind e (λ x => Bind.bind (g x) h)) := by apply bind_assoc
 
+@[simp] theorem Std.bind_assoc_eq {a : Type u} {b : Type v} {c : Type w}
+  (e : Result a) (g : a → Result b) (h : b → Result c) :
+  (bind (bind e g) h) = (bind e (fun x => bind (g x) h)) := by
+  simp only [bind]; apply ITree.bind_assoc'
+
+@[simp] theorem Std.pure_bind {a : Type u} {b : Type v} (x : a) (f : a → Result b) :
+  bind (ok x) f = f x := by
+  simp only [bind, ok]; apply itree_ret_bind
+
+@[simp] theorem Std.pure_bind' {a : Type u} {b : Type v} (x : a) (f : a → Result b) :
+  bind (Pure.pure x) f = f x := by
+  simp only [bind, Pure.pure, ok]; apply itree_ret_bind
+
 /-!
 # Partial Fixpoint
 -/
@@ -269,10 +282,12 @@ directly.
 
 `uncurry` is purely internal to Aeneas' elaboration pipeline and should never
 be directly manipulated by the user. -/
-@[inline] def uncurry {α β γ} (f : α → β → γ) : α × β → γ :=
+@[inline] def uncurry.{u, v, w} {α : Type u} {β : Type v} {γ : Type w}
+    (f : α → β → γ) : α × β → γ :=
   fun (a, b) => f a b
 
-@[simp, grind =] theorem uncurry_apply_pair {α β γ} (f : α → β → γ) (a : α) (b : β) :
+@[simp, grind =] theorem uncurry_apply_pair.{u, v, w} {α : Type u} {β : Type v} {γ : Type w}
+    (f : α → β → γ) (a : α) (b : β) :
     uncurry f (a, b) = f a b :=
   /- This proof is intentionally not `:= rfl`: `simp` would flag this lemma as
      a reflexivity lemma, meaning it would not apply it but would directly use
@@ -288,10 +303,11 @@ We restrict the final return type to `Prop` so the simp lemmas cannot fire on
 bind continuations. `uncurry_eq_prop` handles the base case and
 `uncurry_eq_prop_arrow` handles the curried case. -/
 
-theorem uncurry_eq_prop {α β} (x : α × β) (p : α → β → Prop) :
+theorem uncurry_eq_prop {α : Type u} {β : Type v} (x : α × β) (p : α → β → Prop) :
     uncurry p x = p x.fst x.snd := by cases x; rfl
 
-theorem uncurry_eq_prop_arrow {α β σ} (x : α × β) (p : α → β → σ → Prop) :
+theorem uncurry_eq_prop_arrow {α : Type u} {β : Type v} {σ : Type w}
+    (x : α × β) (p : α → β → σ → Prop) :
     uncurry p x = p x.fst x.snd := by cases x; rfl
 
 /- Allow `partial_fixpoint` to see through `uncurry` in bind continuations.
@@ -302,7 +318,7 @@ open Lean.Order
 
 @[partial_fixpoint_monotone]
 theorem monotone_uncurry
-    {α : Type u} {β : Type v} {φ : Sort w} [PartialOrder φ]
+    {α : Type u} {β : Type v} {φ : Type w} [PartialOrder φ]
     {γ : Sort z} [PartialOrder γ]
     (f : γ → α → β → φ)
     (hmono : monotone f) :
@@ -313,7 +329,7 @@ theorem monotone_uncurry
 
 @[partial_fixpoint_monotone]
 theorem monotone_uncurry_applied
-    {α : Type u} {β : Type v} {φ : Sort w} [PartialOrder φ]
+    {α : Type u} {β : Type v} {φ : Type w} [PartialOrder φ]
     {γ : Sort z} [PartialOrder γ]
     (f : γ → α → β → φ) (p : α × β)
     (hmono : monotone f) :

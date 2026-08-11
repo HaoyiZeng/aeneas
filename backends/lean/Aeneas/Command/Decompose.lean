@@ -335,8 +335,12 @@ structure BindingEntry where
 def matchBind? (e : Expr) : Option (Expr × Expr × Expr × Expr × Expr × Expr) := do
   let fn := e.getAppFn
   let args := e.getAppArgs
-  guard ((fn.isConstOf ``Bind.bind || fn.isConstOf ``bind) && args.size == 6)
-  return (args[0]!, args[1]!, args[2]!, args[3]!, args[4]!, args[5]!)
+  if (fn.isConstOf ``Bind.bind || fn.isConstOf ``bind) && args.size == 6 then
+    return (args[0]!, args[1]!, args[2]!, args[3]!, args[4]!, args[5]!)
+  guard (fn.isConstOf ``_root_.Aeneas.Std.bind && args.size == 4)
+  let some (u, v) := (match fn.constLevels! with | [u, v] => some (u, v) | _ => none) | none
+  return (mkConst ``_root_.Aeneas.Std.Result [v], mkConst ``_root_.Aeneas.Std.Result [u],
+          args[0]!, args[1]!, args[2]!, args[3]!)
 
 /-- Match `@ite α cond inst thenBranch elseBranch`. -/
 def matchIte? (e : Expr) : Option (Expr × Expr × Expr × Expr × Expr) := do
@@ -688,10 +692,10 @@ def rebuildBindings (bindings : Array BindingEntry) (terminal : Expr)
       if entry.fvars.size > 1 then
         -- Tuple bind: rebuild Std.uncurry chain using tree structure
         let cont ← rebuildUncurryFromTree entry.fvarTree result
-        result ← mkAppM ``Bind.bind #[entry.value, cont]
+        result ← mkAppM ``_root_.Aeneas.Std.bind #[entry.value, cont]
       else
         let cont ← mkLambdaFVars #[entry.fvars[0]!] result
-        result ← mkAppM ``Bind.bind #[entry.value, cont]
+        result ← mkAppM ``_root_.Aeneas.Std.bind #[entry.value, cont]
     else
       result ← mkLetFVars #[entry.fvars[0]!] result
   return result
@@ -935,7 +939,7 @@ def extractLetRange (bindings : Array BindingEntry) (terminal : Expr)
         -- Use mkLamAbstract to create a proper lambda even if the fvar
         -- is a let-decl (from a pure binding in a mixed-mode range)
         let cont ← mkLamAbstract #[lastEntry.fvars[0]!] contExpr
-        let replacement ← mkAppM ``Bind.bind #[callExpr, cont]
+        let replacement ← mkAppM ``_root_.Aeneas.Std.bind #[callExpr, cont]
         rebuildBindings bindings replacement 0 start
       else
         -- Pure: use a let-binding for the replacement
@@ -959,7 +963,7 @@ def extractLetRange (bindings : Array BindingEntry) (terminal : Expr)
         -- fvar for the continuation (not lastEntry's fvar which has the wrong type).
         withLocalDeclD `_ (mkConst ``Unit) fun unitFvar => do
           let cont ← mkLambdaFVars #[unitFvar] contExpr
-          let replacement ← mkAppM ``Bind.bind #[callExpr, cont]
+          let replacement ← mkAppM ``_root_.Aeneas.Std.bind #[callExpr, cont]
           rebuildBindings bindings replacement 0 start
       else
         let extractedBody ← rebuildBindings bindings lastEntry.value start (endPos - 1)
@@ -985,7 +989,7 @@ def extractLetRange (bindings : Array BindingEntry) (terminal : Expr)
         let mut cont ← mkLamAbstract #[neededFVars.back!] contExpr
         for j in (List.range (neededFVars.size - 1)).reverse do
           cont ← mkUncurry neededFVars[j]! cont
-        let replacement ← mkAppM ``Bind.bind #[callExpr, cont]
+        let replacement ← mkAppM ``_root_.Aeneas.Std.bind #[callExpr, cont]
         rebuildBindings bindings replacement 0 start
       else do
         -- Pure tuple destructuring: use let-bindings with projections
@@ -1187,7 +1191,7 @@ partial def modifyBindingValue (e : Expr) (idx : Nat)
       match matchBind? e with
       | some (m, inst, α, β, computation, continuation) =>
         let computation' ← action computation
-        return mkApp6 (mkConst ``Bind.bind (e.getAppFn.constLevels!)) m inst α β computation' continuation
+        return ← mkAppM ``_root_.Aeneas.Std.bind #[computation', continuation]
       | none =>
         -- Not a let or bind: operate on the full expression (terminal)
         action e
@@ -1204,7 +1208,7 @@ partial def modifyBindingValue (e : Expr) (idx : Nat)
       | some (m, inst, α, β, computation, continuation) =>
         -- Open the continuation, handling Std.uncurry for tuple-destructuring binds
         let newCont ← openBindCont continuation (idx - 1) action
-        return mkApp6 (mkConst ``Bind.bind (e.getAppFn.constLevels!)) m inst α β computation newCont
+        return ← mkAppM ``_root_.Aeneas.Std.bind #[computation, newCont]
       | none => throwNavError e m!"letAt {idx}: reached terminal before binding"
 where
   /-- Open a bind continuation (which may be a plain lambda or a `Std.uncurry`
@@ -1268,7 +1272,7 @@ partial def modifyAfterLets (e : Expr) (action : Expr → DecomposeM Expr) : Dec
     match matchBind? e with
     | some (m, inst, α, β, computation, continuation) =>
       let newCont ← openBindContAfterLets continuation action
-      return mkApp6 (mkConst ``Bind.bind (e.getAppFn.constLevels!)) m inst α β computation newCont
+      return ← mkAppM ``_root_.Aeneas.Std.bind #[computation, newCont]
     | none =>
       -- Terminal: apply action here
       action e
@@ -1397,7 +1401,9 @@ private def simpOnlyTarget (mvarId : MVarId) (declsToUnfold : Array Name)
 /-- Prove the decomposition equality: `∀ params, body_original = body_decomposed`.
     `defNames` are the names of all auxiliary definitions introduced. -/
 def proveStep (goalType : Expr) (defNames : Array Name) : TermElabM Expr := do
-  let simpThms := #[``Aeneas.Std.bind_assoc_eq, ``LawfulMonad.pure_bind]
+  let simpThms := #[``Aeneas.Std.bind_assoc_eq, ``LawfulMonad.pure_bind,
+                    ``_root_.Aeneas.Std.Std.bind_assoc_eq, ``_root_.Aeneas.Std.Std.pure_bind,
+                    ``_root_.Aeneas.Std.Std.pure_bind']
   let mvar ← mkFreshExprMVar goalType
   let (_, mvarId) ← mvar.mvarId!.intros
   let unfoldNames := defNames ++ #[``_root_.Aeneas.Std.uncurry]

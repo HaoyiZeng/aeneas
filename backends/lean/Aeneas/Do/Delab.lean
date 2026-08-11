@@ -54,8 +54,8 @@ private def parseCtorBind? (arg : Expr) : DelabM CtorBindShape := do
     destructuring continuations in addition to plain binds and lets. -/
 partial def aeneasDelabDoElems : DelabM (List DoElem) := do
   let e ← getExpr
-  if e.isAppOfArity ``Bind.bind 6 then
-    let α := e.getAppArgs[2]!
+  if e.isAppOfArity ``_root_.Aeneas.Std.bind 4 then
+    let α := e.getAppArgs[0]!
     let ma ← withAppFn <| withAppArg delab
     let arg := e.appArg!
     if arg.isAppOfArity ``_root_.Aeneas.Std.uncurry 4 then
@@ -111,13 +111,11 @@ where
 open Parser Term
 
 /-- Top-level `do`-block delab, restricted to the `Std.Result` monad. -/
-@[delab app.Bind.bind]
+@[delab app.Aeneas.Std.bind]
 def aeneasDelabDo : Delab := whenNotPPOption getPPExplicit <| whenPPOption getPPNotation do
   unless Aeneas.customDoElab.get (← getOptions) do failure
   let e ← getExpr
-  -- only use the new `do` delaborator for `Result _` do blocks
-  unless e.isAppOfArity ``Bind.bind 6 do failure
-  unless e.getAppArgs[0]!.isConstOf ``Aeneas.Std.Result do failure
+  unless e.isAppOfArity ``_root_.Aeneas.Std.bind 4 do failure
   let elems ← aeneasDelabDoElems
   let items ← elems.toArray.mapM (`(doSeqItem|$(·):doElem))
   `(do $items:doSeqItem*)

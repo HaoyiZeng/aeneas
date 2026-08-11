@@ -253,6 +253,15 @@ instance : LawfulMonad (ITree E) := LawfulMonad.mk' (ITree E)
     rw [ITree.bind.eq_def t1]
     split <;> simp [*])
 
+theorem ITree.bind_assoc' {E : Effect.{u}} {R : Type v} {S : Type w} {T : Type x}
+    (t1 : ITree E R) (t2 : R → ITree E S) (t3 : S → ITree E T) :
+    ITree.bind (ITree.bind t1 t2) t3 = ITree.bind t1 (fun r => ITree.bind (t2 r) t3) := by
+  ext n
+  induction n generalizing t1; congr 0
+  rw [ITree.bind.eq_def t1]
+  rw [ITree.bind.eq_def t1]
+  split <;> simp [*]
+
 instance : MonoBind (ITree E) where
   bind_mono_left := by
     intro _ _ _ _ _ _

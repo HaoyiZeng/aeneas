@@ -195,7 +195,7 @@ def qimp_spec {α β} (P : α → Prop) (k : α → Result β) (Q : β → Prop)
   ∀ x, P x → spec (k x) Q
 
 /-- This alternative to `spec_bind` controls the introduction of universal quantifiers with `imp_spec`. -/
-theorem spec_bind' {α β} {k : α -> Result β} {Pₖ : Post β} {m : Result α} {Pₘ : Post α} :
+theorem spec_bind' {α : Type u} {β : Type v} {k : α -> Result β} {Pₖ : Post β} {m : Result α} {Pₘ : Post α} :
   spec m Pₘ →
   (qimp_spec Pₘ k Pₖ) →
   spec (Std.bind m k) Pₖ := by
@@ -263,7 +263,7 @@ theorem dspec_mono' {α} {P₁ : Post α} {m : Result α} {P₀ : Post α} (h : 
 def qimp_dspec {α β} (P : α → Prop) (k : α → Result β) (Q : β → Prop) : Prop :=
   ∀ x, P x → dspec (k x) Q
 
-theorem dspec_bind' {α β} {k : α -> Result β} {Pₖ : Post β} {m : Result α} {Pₘ : Post α} :
+theorem dspec_bind' {α : Type u} {β : Type v} {k : α -> Result β} {Pₖ : Post β} {m : Result α} {Pₘ : Post α} :
   dspec m Pₘ →
   (qimp_dspec Pₘ k Pₖ) →
   dspec (Std.bind m k) Pₖ := by

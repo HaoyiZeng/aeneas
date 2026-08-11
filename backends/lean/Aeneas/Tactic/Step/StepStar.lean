@@ -393,9 +393,9 @@ def analyzeTarget : TacticM TargetKind := do
       let program := args[1]
       -- Check if this is a bind
       let e ← Utils.normalizeLetBindings program
-      if let .const ``Bind.bind .. := e.getAppFn then
-        let #[_m, _self, _α, _β, _value, cont] := e.getAppArgs
-          | throwError "Expected bind to have 6 arguments, found {← e.getAppArgs.mapM (liftM ∘ ppExpr)}"
+      if let .const ``Aeneas.Std.bind .. := e.getAppFn then
+        let #[_α, _β, _value, cont] := e.getAppArgs
+          | throwError "Expected bind to have 4 arguments, found {← e.getAppArgs.mapM (liftM ∘ ppExpr)}"
         let names ← Step.getPostNames cont
         pure (.bind names)
       else if let .some bfInfo ← Bifurcation.Info.ofExpr e then

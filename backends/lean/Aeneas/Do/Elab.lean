@@ -62,11 +62,20 @@ def mkContext (expectedType : Expr) : TermElabM Context := do
   return { m, expectedAlpha := α, bindInst, pureInst }
 
 def ElabM.mkBind (e k : Expr) : ElabM Expr := do
-  let ctx ← read
-  mkAppOptM ``Bind.bind #[some ctx.m, some ctx.bindInst, none, none, some e, some k]
+  let _ctx ← read
+  mkAppM ``_root_.Aeneas.Std.bind #[e, k]
 
 /-- Build `m α`. -/
-def ElabM.mkMonadicType (α : Expr) : ElabM Expr := read >>= fun ctx => pure (mkApp ctx.m α)
+def ElabM.mkMonadicType (α : Expr) : ElabM Expr := do
+  let ctx ← read
+  /- `ctx.m` was split off the block's expected type, so its universe is the one
+     the *block* returns. Reusing it forces every intermediate binding into that
+     universe, which `Result` no longer requires: `Std.bind` relates two. Rebuild
+     the head with fresh levels so each binding picks its own. -/
+  if ctx.m.isConstOf ``_root_.Aeneas.Std.Result then
+    return mkApp (← mkConstWithFreshMVarLevels ``_root_.Aeneas.Std.Result) α
+  else
+    return mkApp ctx.m α
 
 /-- Run an `ElabM` against the given `do` block expected type. -/
 def ElabM.execute (x : ElabM Expr) (expectedType : Expr) : TermElabM Expr := do
