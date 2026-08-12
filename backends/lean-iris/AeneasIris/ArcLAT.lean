@@ -45,9 +45,9 @@ abbrev AH (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF] [HeapGS.{0} GF] :
 
 `arcAuth γ 1 0` and `isArc γ a v` are handed over together, because the client
 that allocates is the one that owns the authority afterwards. -/
-theorem new_spec (v : T) (Φ : Post GF (Handle T)) :
-    iprop(∀ γ a, arcAuth (T := T) γ 1 0 -∗ isArc γ a v -∗ Φ a)
-      ⊢ wpi_mask GF (AH GF) (new (E := RustEffect) v) (fun a => Φ a) ⊤ := by
+theorem new_spec (v : T) (M : CoPset) :
+    iprop(emp) ⊢ wpi_mask GF (AH GF) (new (E := RustEffect) v)
+      (fun a => iprop(∃ γ, arcAuth (T := T) γ 1 0 ∗ isArc γ a v)) M := by
   sorry
 
 /-! ## Strong references -/
@@ -57,10 +57,10 @@ theorem new_spec (v : T) (Φ : Post GF (Handle T)) :
 `isArc` carries a share of the payload cell, so dereferencing needs nothing
 shared -- which is what makes `Arc` useful in the first place. The value read is
 the one the metadata agrees on, so `RET v` is determined by `isArc γ a v`. -/
-theorem deref_spec (γ : GName) (a : Handle T) (v : T) (Φ : Post GF T) :
-    iprop(isArc γ a v ∗ (isArc γ a v -∗ Φ v))
-      ⊢ wpi_mask GF (AH GF) (deref (E := RustEffect) a) (fun r => Φ r) ⊤ := by
-  iintro ⟨HA, Hk⟩
+theorem deref_spec (γ : GName) (a : Handle T) (v : T) (M : CoPset) :
+    iprop(isArc γ a v) ⊢ wpi_mask GF (AH GF) (deref (E := RustEffect) a)
+      (fun r => iprop(⌜r = v⌝ ∗ isArc γ a v)) M := by
+  iintro HA
   /- `icases` does not see through a `def`, so unfold `isArc` first. -/
   simp only [Arc.isArc] at *
   icases HA with ⟨%q, Hmeta, Hstrong, Hpt⟩
@@ -71,7 +71,8 @@ theorem deref_spec (γ : GName) (a : Handle T) (v : T) (Φ : Post GF T) :
   · iexact Hpt
   iintro Hpt
   imodintro
-  iapply Hk
+  isplitl []
+  · ipureintro; rfl
   iexists q
   isplitl [Hmeta]
   · iexact Hmeta
@@ -202,39 +203,43 @@ needed. -/
 
 /- **`weakClone`** on a dangling reference. -/
 omit [Nonempty T] [ArcG GF T] in
-theorem dangling_clone_spec (Φ : Post GF (WeakHandle T)) :
-    iprop(Φ .dangling)
-      ⊢ wpi_mask GF (AH GF) (weakClone (E := RustEffect) (T := T) .dangling)
-          (fun w => Φ w) ⊤ := by
+theorem dangling_clone_spec (M : CoPset) :
+    iprop(emp) ⊢ wpi_mask GF (AH GF) (weakClone (E := RustEffect) (T := T) .dangling)
+      (fun r => iprop(⌜r = WeakHandle.dangling⌝)) M := by
   simp only [Arc.weakClone]
-  exact wpi_ret _ _ _
+  iintro _
+  iapply wpi_ret
+  itrivial
 
 /- **`weakUpgrade`** on a dangling reference always fails. -/
 omit [Nonempty T] [ArcG GF T] in
-theorem dangling_upgrade_spec (Φ : Post GF (Option (Handle T))) :
-    iprop(Φ none)
-      ⊢ wpi_mask GF (AH GF) (weakUpgrade (E := RustEffect) (T := T) .dangling)
-          (fun r => Φ r) ⊤ := by
+theorem dangling_upgrade_spec (M : CoPset) :
+    iprop(emp) ⊢ wpi_mask GF (AH GF) (weakUpgrade (E := RustEffect) (T := T) .dangling)
+      (fun r => iprop(⌜r = none⌝)) M := by
   simp only [Arc.weakUpgrade]
-  exact wpi_ret _ _ _
+  iintro _
+  iapply wpi_ret
+  itrivial
 
 /- **`weakStrongCount`** on a dangling reference is `0`. -/
 omit [Nonempty T] [ArcG GF T] in
-theorem dangling_strong_count_spec (Φ : Post GF Int) :
-    iprop(Φ 0)
-      ⊢ wpi_mask GF (AH GF) (weakStrongCount (E := RustEffect) (T := T) .dangling)
-          (fun r => Φ r) ⊤ := by
+theorem dangling_strong_count_spec (M : CoPset) :
+    iprop(emp) ⊢ wpi_mask GF (AH GF) (weakStrongCount (E := RustEffect) (T := T) .dangling)
+      (fun r => iprop(⌜r = 0⌝)) M := by
   simp only [Arc.weakStrongCount]
-  exact wpi_ret _ _ _
+  iintro _
+  iapply wpi_ret
+  itrivial
 
 /- **`weakDrop`** on a dangling reference does nothing. -/
 omit [Nonempty T] [ArcG GF T] in
-theorem dangling_drop_spec (Φ : Post GF Unit) :
-    iprop(Φ ())
-      ⊢ wpi_mask GF (AH GF) (weakDrop (E := RustEffect) (T := T) .dangling)
-          (fun u => Φ u) ⊤ := by
+theorem dangling_drop_spec (M : CoPset) :
+    iprop(emp) ⊢ wpi_mask GF (AH GF) (weakDrop (E := RustEffect) (T := T) .dangling)
+      (fun r => iprop(⌜r = ()⌝)) M := by
   simp only [Arc.weakDrop]
-  exact wpi_ret _ _ _
+  iintro _
+  iapply wpi_ret
+  itrivial
 
 end
 
