@@ -78,7 +78,7 @@ the lock moves to `write` and the caller receives the guard; on any other state
 nothing changes and the result is `none`. That the failing branch leaves
 `isRwLock` untouched is what lets the enclosing loop abort and retry. -/
 theorem try_write_spec (γ : GName) (lk : Handle T) :
-    ⊢ AWP ⟪ ∀ s v, isRwLock γ lk s v ⟫ (RH GF) (try_write (E := RustEffect) lk) @ (∅ : CoPset)
+    ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ (RH GF) (try_write (E := RustEffect) lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk (if s = .free then .write else s) v
         | RET (if s = .free then some ⟨lk⟩ else none)
         ; if s = .free then writeGuard γ lk v else emp ⟫ := by
@@ -96,12 +96,12 @@ implementation hands back, only that whatever it is satisfies the nested triple.
 The `∀ v₁` there allows releasing a value different from the one acquired, and
 the inner `∀ v₀` absorbs whatever the lock held. -/
 theorem write_spec (γ : GName) (lk : Handle T) :
-    ⊢ AWP ⟪ ∀ s v, isRwLock γ lk s v ⟫ (RH GF) (write (E := RustEffect) lk) @ (∅ : CoPset)
+    ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ (RH GF) (write (E := RustEffect) lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk .write v ∗ ⌜s = .free⌝
         | rel, RET (⟨lk⟩, rel)
         ; writeGuard γ lk v ∗
           □ (∀ v₁ : T, writeGuard γ lk v₁ -∗
-               AWP ⟪ ∀ v₀, isRwLock γ lk .write v₀ ⟫ (RH GF) (rel ⟨lk⟩) @ (∅ : CoPset)
+               ⟪ ∀ v₀, isRwLock γ lk .write v₀ ⟫ (RH GF) (rel ⟨lk⟩) @ (∅ : CoPset)
                    ⟪ isRwLock γ lk .free v₁ | RET () ⟫) ⟫ := by
   sorry
 
@@ -112,7 +112,7 @@ Same shape, with the reader count doing the work `free`/`write` does above:
 
 /-- **`try_read`.** Mirrors `try_read_spec`. -/
 theorem try_read_spec (γ : GName) (lk : Handle T) :
-    ⊢ AWP ⟪ ∀ s v, isRwLock γ lk s v ⟫ (RH GF) (try_read (E := RustEffect) lk) @ (∅ : CoPset)
+    ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ (RH GF) (try_read (E := RustEffect) lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk (match s with
                          | .free => .read 0
                          | .read n => .read (n + 1)
@@ -127,13 +127,13 @@ The committed resource is a disjunction because the reference's is. Unlike
 `write` there is no `⌜s = .free⌝`: a reader waits only for the absence of a
 writer, so `free` and `read n` both commit. -/
 theorem read_spec (γ : GName) (lk : Handle T) :
-    ⊢ AWP ⟪ ∀ s v, isRwLock γ lk s v ⟫ (RH GF) (read (E := RustEffect) lk) @ (∅ : CoPset)
+    ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ (RH GF) (read (E := RustEffect) lk) @ (∅ : CoPset)
         ⟪ (isRwLock γ lk (.read 0) v ∗ ⌜s = .free⌝) ∨
           (∃ m : Nat, isRwLock γ lk (.read (m + 1)) v ∗ ⌜s = .read m⌝)
         | rel, RET (⟨lk⟩, rel)
         ; readGuardFrac γ lk 1 v ∗
           □ (readGuardFrac γ lk 1 v -∗
-               AWP ⟪ ∀ s', isRwLock γ lk s' v ⟫ (RH GF) (rel ⟨lk⟩) @ (∅ : CoPset)
+               ⟪ ∀ s', isRwLock γ lk s' v ⟫ (RH GF) (rel ⟨lk⟩) @ (∅ : CoPset)
                    ⟪ (isRwLock γ lk .free v ∗ ⌜s' = .read 0⌝) ∨
                      (∃ n : Nat, isRwLock γ lk (.read n) v ∗ ⌜s' = .read (n + 1)⌝)
                    | RET () ⟫) ⟫ := by

@@ -62,7 +62,7 @@ def atomicWpi {Eff : Effect.{u}} {V : Type v} {A B P : Type _}
 
 /-! ## Notation
 
-`AWP ⟪ ∀ x.., α ⟫ Hd t @ E ⟪ ∃ y.., β | z.., RET v; POST ⟫`, with any number of
+`⟪ ∀ x.., α ⟫ Hd t @ E ⟪ ∃ y.., β | z.., RET v; POST ⟫`, with any number of
 binders in each of the three groups, and `RET`-binders and `POST` both optional.
 
 **One rule covers every combination.** The reference needs a separate rule per
@@ -82,13 +82,13 @@ declare_syntax_cat awPost
 syntax "⟪ " ("∀ " ident+ ", ")? term " ⟫" : awPre
 syntax "⟪ " ("∃ " ident+ ", ")? term " | " (ident+ ", ")? "RET " term ("; " term)? " ⟫" : awPost
 
-syntax:max "AWP " ppRealFill(awPre ppSpace term:arg ppSpace term:arg " @ " term:arg
+syntax:max ppRealFill(awPre ppSpace term:arg ppSpace term:arg " @ " term:arg
   ppSpace awPost) : term
 
 open AeneasIris.AtomicP in
 macro_rules
-  | `(AWP ⟪ $[∀ $xs* , ]? $α:term ⟫ $Hd:term $t:term @ $E:term
-          ⟪ $[∃ $ys* , ]? $β:term | $[$zs* , ]? RET $v:term $[; $post:term]? ⟫) => do
+  | `(⟪ $[∀ $xs* , ]? $α:term ⟫ $Hd:term $t:term @ $E:term
+      ⟪ $[∃ $ys* , ]? $β:term | $[$zs* , ]? RET $v:term $[; $post:term]? ⟫) => do
       let xs : List Ident := (xs.map (·.toList)).getD []
       let ys : List Ident := (ys.map (·.toList)).getD []
       let zs : List Ident := (zs.map (·.toList)).getD []
@@ -122,7 +122,7 @@ private def delabAuOptLeaf : DelabM (Option Term) :=
         return some body
     | _ => return none
 
-/-- `atomicWpi Hd t E α β POST f` → `AWP ⟪ ∀ x.., α ⟫ Hd t @ E ⟪ ∃ y.., β | z.., RET v; POST ⟫`.
+/-- `atomicWpi Hd t E α β POST f` → `⟪ ∀ x.., α ⟫ Hd t @ E ⟪ ∃ y.., β | z.., RET v; POST ⟫`.
 
 Nothing in the packed term records where one binder group ends and the next
 begins, so the boundaries are read off the *shorter* families: `α` binds exactly
@@ -154,7 +154,7 @@ def delabAtomicWpi : Delab := do
     | false, true,  some p => `(awPost| ⟪ ∃ $ys*, $bBody | RET $vBody; $p ⟫)
     | false, false, none   => `(awPost| ⟪ ∃ $ys*, $bBody | $zs*, RET $vBody ⟫)
     | false, false, some p => `(awPost| ⟪ ∃ $ys*, $bBody | $zs*, RET $vBody; $p ⟫)
-  `(AWP $preStx:awPre $Hd $t @ $E $postStx:awPost)
+  `($preStx:awPre $Hd $t @ $E $postStx:awPost)
 
 end Delab
 
@@ -168,17 +168,17 @@ section Tests
 variable {Eff : Effect.{0}} (Hd : Handler Eff GF)
 variable {S V : Type} (inv : S → V → IProp GF) (t : ITree Eff Nat)
 
-/-- info: AWP ⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ ∃ w, inv s w | r, RET r; inv s v ⟫ : IProp GF -/
+/-- info: ⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ ∃ w, inv s w | r, RET r; inv s v ⟫ : IProp GF -/
 #guard_msgs in
-#check (AWP ⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ ∃ w, inv s w | r, RET r; inv s v ⟫)
+#check (⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ ∃ w, inv s w | r, RET r; inv s v ⟫)
 
-/-- info: AWP ⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ ∃ w, inv s w | RET 0 ⟫ : IProp GF -/
+/-- info: ⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ ∃ w, inv s w | RET 0 ⟫ : IProp GF -/
 #guard_msgs in
-#check (AWP ⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ ∃ w, inv s w | RET 0 ⟫)
+#check (⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ ∃ w, inv s w | RET 0 ⟫)
 
-/-- info: AWP ⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ inv s v | RET 0 ⟫ : IProp GF -/
+/-- info: ⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ inv s v | RET 0 ⟫ : IProp GF -/
 #guard_msgs in
-#check (AWP ⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ inv s v | RET 0 ⟫)
+#check (⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ inv s v | RET 0 ⟫)
 
 end Tests
 
