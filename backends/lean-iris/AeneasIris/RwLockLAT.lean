@@ -63,7 +63,13 @@ theorem new_spec (v : T) (Φ : Post GF (Handle T)) :
       ⊢ wpi_mask GF (RH GF) (new (E := RustEffect) v) (fun lk => Φ lk) ⊤ := by
   sorry
 
-/-! ## Write -/
+/-! ## Write
+
+Both specs put the guard in `POST`, not in the committed `β`. The guard is the
+caller's private receipt -- no other thread can observe it -- so forcing it
+through the linearisation point would constrain the spec for nothing. Only the
+change to the *shared* resource has to be atomic. This is the split `MultiShot`
+makes, and it is why `atomicWpi` carries a `POST` at all. -/
 
 /-- **`try_write`.** Mirrors `try_write_spec`.
 
@@ -71,15 +77,11 @@ The postcondition is a function of the state the attempt *observed*: on `free`
 the lock moves to `write` and the caller receives the guard; on any other state
 nothing changes and the result is `none`. That the failing branch leaves
 `isRwLock` untouched is what lets the enclosing loop abort and retry. -/
-theorem try_write_spec (γ : GName) (lk : Handle T)
-    (Φ : Post GF (Option (WriteGuard T))) :
-    iprop(AU ⟪ ∃ s v, isRwLock γ lk s v ⟫ @ (⊤ : CoPset), (∅ : CoPset)
-            ⟪ ∀ r,
-                (isRwLock γ lk (if s = .free then .write else s) v ∗
-                 (if s = .free then iprop(⌜r = some ⟨lk⟩⌝ ∗ writeGuard γ lk v)
-                  else iprop(⌜r = none⌝))),
-              COMM Φ r ⟫)
-      ⊢ wpi_mask GF (RH GF) (try_write (E := RustEffect) lk) (fun r => Φ r) ⊤ := by
+theorem try_write_spec (γ : GName) (lk : Handle T) :
+    ⊢ AWP ⟪ ∀ s v, isRwLock γ lk s v ⟫ (RH GF) (try_write (E := RustEffect) lk) @ (∅ : CoPset)
+        ⟪ isRwLock γ lk (if s = .free then .write else s) v
+        | RET (if s = .free then some ⟨lk⟩ else none)
+        ; if s = .free then writeGuard γ lk v else emp ⟫ := by
   sorry
 
 /-- **`write`.** Mirrors `write_spec`.
@@ -89,23 +91,18 @@ any state, and the update is committed at the instant the lock is free. That is
 what "it blocked" means -- putting `.free` in the precondition would restrict the
 spec to the uncontended case and make the retry loop pointless.
 
-The release comes back under `□` as a nested atomic triple, mirroring the
-reference's `□ (∀ v₁, writeGuard γ l v₁ -∗ ⟪…⟫ hl(&rel &l) @ ∅ ⟪…⟫)`. The `∀ v₁`
-allows releasing a value different from the one acquired; the inner `∃ v₀`
-absorbs whatever the lock held. -/
-theorem write_spec (γ : GName) (lk : Handle T)
-    (Φ : Post GF (WriteGuard T × (WriteGuard T → ITree RustEffect Unit))) :
-    iprop(AU ⟪ ∃ s v, isRwLock γ lk s v ⟫ @ (⊤ : CoPset), (∅ : CoPset)
-            ⟪ ∀ g rel,
-                (isRwLock γ lk .write v ∗ ⌜s = .free⌝ ∗
-                 ⌜g = ⟨lk⟩⌝ ∗ writeGuard γ lk v ∗
-                 □ (∀ v₁ : T, writeGuard γ lk v₁ -∗
-                      (AU ⟪ ∃ v₀, isRwLock γ lk .write v₀ ⟫
-                             @ (⊤ : CoPset), (∅ : CoPset)
-                           ⟪ isRwLock γ lk .free v₁, COMM True ⟫) -∗
-                      wpi_mask GF (RH GF) (rel g) (fun _u => iprop(True)) ⊤)),
-              COMM Φ (g, rel) ⟫)
-      ⊢ wpi_mask GF (RH GF) (write (E := RustEffect) lk) (fun gr => Φ gr) ⊤ := by
+`rel` is a `RET`-binder: the spec does not say *which* release the
+implementation hands back, only that whatever it is satisfies the nested triple.
+The `∀ v₁` there allows releasing a value different from the one acquired, and
+the inner `∀ v₀` absorbs whatever the lock held. -/
+theorem write_spec (γ : GName) (lk : Handle T) :
+    ⊢ AWP ⟪ ∀ s v, isRwLock γ lk s v ⟫ (RH GF) (write (E := RustEffect) lk) @ (∅ : CoPset)
+        ⟪ isRwLock γ lk .write v ∗ ⌜s = .free⌝
+        | rel, RET (⟨lk⟩, rel)
+        ; writeGuard γ lk v ∗
+          □ (∀ v₁ : T, writeGuard γ lk v₁ -∗
+               AWP ⟪ ∀ v₀, isRwLock γ lk .write v₀ ⟫ (RH GF) (rel ⟨lk⟩) @ (∅ : CoPset)
+                   ⟪ isRwLock γ lk .free v₁ | RET () ⟫) ⟫ := by
   sorry
 
 /-! ## Read
@@ -114,41 +111,32 @@ Same shape, with the reader count doing the work `free`/`write` does above:
 `free` becomes `read 0` and `read n` becomes `read (n+1)`. -/
 
 /-- **`try_read`.** Mirrors `try_read_spec`. -/
-theorem try_read_spec (γ : GName) (lk : Handle T)
-    (Φ : Post GF (Option (ReadGuard T))) :
-    iprop(AU ⟪ ∃ s v, isRwLock γ lk s v ⟫ @ (⊤ : CoPset), (∅ : CoPset)
-            ⟪ ∀ r,
-                (isRwLock γ lk (match s with
-                                | .free => .read 0
-                                | .read n => .read (n + 1)
-                                | .write => .write) v ∗
-                 (if s = .write then iprop(⌜r = none⌝)
-                  else iprop(⌜r = some ⟨lk⟩⌝ ∗ readGuardFrac γ lk 1 v))),
-              COMM Φ r ⟫)
-      ⊢ wpi_mask GF (RH GF) (try_read (E := RustEffect) lk) (fun r => Φ r) ⊤ := by
+theorem try_read_spec (γ : GName) (lk : Handle T) :
+    ⊢ AWP ⟪ ∀ s v, isRwLock γ lk s v ⟫ (RH GF) (try_read (E := RustEffect) lk) @ (∅ : CoPset)
+        ⟪ isRwLock γ lk (match s with
+                         | .free => .read 0
+                         | .read n => .read (n + 1)
+                         | .write => .write) v
+        | RET (if s = .write then none else some ⟨lk⟩)
+        ; if s = .write then emp else readGuardFrac γ lk 1 v ⟫ := by
   sorry
 
 /-- **`read`.** Mirrors `read_spec`.
 
-The post is a disjunction because the reference's is. Unlike `write` there is no
-`⌜s = .free⌝`: a reader waits only for the absence of a writer. -/
-theorem read_spec (γ : GName) (lk : Handle T)
-    (Φ : Post GF (ReadGuard T × (ReadGuard T → ITree RustEffect Unit))) :
-    iprop(AU ⟪ ∃ s v, isRwLock γ lk s v ⟫ @ (⊤ : CoPset), (∅ : CoPset)
-            ⟪ ∀ g rel,
-                (((isRwLock γ lk (.read 0) v ∗ ⌜s = .free⌝) ∨
-                  (∃ m : Nat, isRwLock γ lk (.read (m + 1)) v ∗ ⌜s = .read m⌝)) ∗
-                 ⌜g = ⟨lk⟩⌝ ∗ readGuardFrac γ lk 1 v ∗
-                 □ (readGuardFrac γ lk 1 v -∗
-                      (AU ⟪ ∃ s', isRwLock γ lk s' v ⟫
-                             @ (⊤ : CoPset), (∅ : CoPset)
-                           ⟪ ((isRwLock γ lk .free v ∗ ⌜s' = .read 0⌝) ∨
-                              (∃ n : Nat, isRwLock γ lk (.read n) v ∗
-                                          ⌜s' = .read (n + 1)⌝)),
-                             COMM True ⟫) -∗
-                      wpi_mask GF (RH GF) (rel g) (fun _u => iprop(True)) ⊤)),
-              COMM Φ (g, rel) ⟫)
-      ⊢ wpi_mask GF (RH GF) (read (E := RustEffect) lk) (fun gr => Φ gr) ⊤ := by
+The committed resource is a disjunction because the reference's is. Unlike
+`write` there is no `⌜s = .free⌝`: a reader waits only for the absence of a
+writer, so `free` and `read n` both commit. -/
+theorem read_spec (γ : GName) (lk : Handle T) :
+    ⊢ AWP ⟪ ∀ s v, isRwLock γ lk s v ⟫ (RH GF) (read (E := RustEffect) lk) @ (∅ : CoPset)
+        ⟪ (isRwLock γ lk (.read 0) v ∗ ⌜s = .free⌝) ∨
+          (∃ m : Nat, isRwLock γ lk (.read (m + 1)) v ∗ ⌜s = .read m⌝)
+        | rel, RET (⟨lk⟩, rel)
+        ; readGuardFrac γ lk 1 v ∗
+          □ (readGuardFrac γ lk 1 v -∗
+               AWP ⟪ ∀ s', isRwLock γ lk s' v ⟫ (RH GF) (rel ⟨lk⟩) @ (∅ : CoPset)
+                   ⟪ (isRwLock γ lk .free v ∗ ⌜s' = .read 0⌝) ∨
+                     (∃ n : Nat, isRwLock γ lk (.read n) v ∗ ⌜s' = .read (n + 1)⌝)
+                   | RET () ⟫) ⟫ := by
   sorry
 
 /-! ## Dereference
