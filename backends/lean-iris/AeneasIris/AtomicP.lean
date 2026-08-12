@@ -41,13 +41,13 @@ stable head symbol to match on, and the delaborator distinguishes it from
 `Std.uncurry` (which prints as a *tuple* binder `(a, b) => …`) to print
 *separate* binders `a b => …`. Compare `Aeneas.Std.WP.uncurry'`, which exists for
 exactly the same reason. -/
-def auUncurry {α β : Type} {PROP : Type _} (p : α → β → PROP) : α × β → PROP :=
+def auUncurry {α β : Type _} {PROP : Type _} (p : α → β → PROP) : α × β → PROP :=
   fun (x, y) => p x y
 
-@[simp] theorem auUncurry_pair {α β : Type} {PROP : Type _}
+@[simp] theorem auUncurry_pair {α β : Type _} {PROP : Type _}
     (x : α) (y : β) (p : α → β → PROP) : auUncurry p (x, y) = p x y := rfl
 
-theorem auUncurry_eq {α β : Type} {PROP : Type _}
+theorem auUncurry_eq {α β : Type _} {PROP : Type _}
     (x : α × β) (p : α → β → PROP) : auUncurry p x = p x.fst x.snd := rfl
 
 section
@@ -71,7 +71,7 @@ otherwise hand back the packed pair.
 It is `scoped` because it changes how *every* product existential destructs.
 That is what we want inside atomic proofs and nowhere else, so it is opt-in
 via `open AeneasIris.AtomicP`. -/
-scoped instance (priority := high) intoExistsProd {A R : Type} (Φ : A × R → PROP) :
+scoped instance (priority := high) intoExistsProd {A R : Type _} (Φ : A × R → PROP) :
     IntoExists (iprop(∃ p : A × R, Φ p)) (fun a : A => iprop(∃ r : R, Φ (a, r))) where
   into_exists := by
     iintro ⟨%p, H⟩
@@ -85,7 +85,7 @@ the monotonicity the fixpoint needs is still proved once, generically. -/
 
 /-- One atomic accessor: open the world from `Eo` to `Ei`, hand over `α x`, and
 offer the choice of putting it back (`P`) or committing (`β x y`). -/
-def atomicAcc {A B : Type} (Eo Ei : CoPset)
+def atomicAcc {A B : Type _} (Eo Ei : CoPset)
     (α : A → PROP) (P : PROP) (β Φ : A → B → PROP) : PROP :=
   iprop(|={Eo,Ei}=> ∃ x, α x ∗ ((α x ={Ei,Eo}=∗ P) ∧ (∀ y, β x y ={Ei,Eo}=∗ Φ x y)))
 
@@ -96,7 +96,7 @@ fixed: it is proved **once**, generically in `α`, `β`, `Φ` and in the arity -
 which is packed away inside `A` and `B` and never mentioned. Compare the
 telescoped development, which proves the same thing once for the same reason
 (`Iris/BI/Lib/Atomic.lean:105`). -/
-instance atomicAccMono {A B : Type} (Eo Ei : CoPset)
+instance atomicAccMono {A B : Type _} (Eo Ei : CoPset)
     (α : A → PROP) (β Φ : A → B → PROP) :
     BIMonoPred (PROP := PROP) (A := Unit)
       (fun Ψ (_ : Unit) => atomicAcc Eo Ei α (Ψ ()) β Φ) where
@@ -120,7 +120,7 @@ instance atomicAccMono {A B : Type} (Eo Ei : CoPset)
 
 /-- The atomic update: the accessor whose abort branch hands back the update
 itself, so it survives a failed attempt and can be retried. -/
-def atomicUpdate {A B : Type} (Eo Ei : CoPset)
+def atomicUpdate {A B : Type _} (Eo Ei : CoPset)
     (α : A → PROP) (β Φ : A → B → PROP) : PROP :=
   bi_greatest_fixpoint (fun Ψ (_ : Unit) => atomicAcc Eo Ei α (Ψ ()) β Φ) ()
 
@@ -129,7 +129,7 @@ def atomicUpdate {A B : Type} (Eo Ei : CoPset)
 Everything a proof needs follows from this: `imod` on the `fupd`, then `icases`
 peels the binders (natively, via `intoExistsAuUncurry`), and the two branches of
 the `∧` are abort and commit. -/
-theorem aupd_unfold {A B : Type} (Eo Ei : CoPset)
+theorem aupd_unfold {A B : Type _} (Eo Ei : CoPset)
     (α : A → PROP) (β Φ : A → B → PROP) :
     atomicUpdate Eo Ei α β Φ ⊢ atomicAcc Eo Ei α (atomicUpdate Eo Ei α β Φ) β Φ := by
   conv => lhs; unfold atomicUpdate

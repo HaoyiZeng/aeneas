@@ -52,7 +52,7 @@ committed atomically. `POST` is the caller's private receipt -- a guard, a
 handle, a borrow -- which nobody else can observe, so forcing it through the
 linearisation point would only make the spec harder to use. `f` is the value the
 tree returns. -/
-def atomicWpi {Eff : Effect.{u}} {V : Type v} {A B P : Type}
+def atomicWpi {Eff : Effect.{u}} {V : Type v} {A B P : Type _}
     (Hd : Handler Eff GF) (t : ITree Eff V) (E : CoPset)
     (α : A → IProp GF) (β : A → B → IProp GF)
     (POST : A → B → P → Option (IProp GF)) (f : A → B → P → V) : IProp GF :=
