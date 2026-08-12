@@ -55,11 +55,13 @@ theorem new_spec (v : T) (Φ : Post GF (Handle T)) :
 /-- **`deref`.** Atomic, unlike the reference -- see the note above.
 
 The payload read is the one the metadata agrees on, which is what makes the
-`RET v` meaningful: `isArc γ a v` already fixes `v`. -/
+`RET v` meaningful: `isArc γ a v` already fixes `v` -- and, with it, that there
+is still a payload to read. Nothing about the count belongs in the
+precondition. -/
 theorem deref_spec (γ : GName) (a : Handle T) (v : T) :
     ⊢ isArc γ a v -∗
-      ⟪ ∀ n m, arcAuth (T := T) γ (n + 1) m ⟫ (AH GF) (deref (E := RustEffect) a) @ (∅ : CoPset)
-      ⟪ arcAuth (T := T) γ (n + 1) m | RET v; isArc γ a v ⟫ := by
+      ⟪ ∀ n m, arcAuth (T := T) γ n m ⟫ (AH GF) (deref (E := RustEffect) a) @ (∅ : CoPset)
+      ⟪ arcAuth (T := T) γ n m | RET v; isArc γ a v ⟫ := by
   sorry
 
 /-- **`strong_count`.** Mirrors `weak_strong_count_spec`'s shape. -/
@@ -112,12 +114,18 @@ theorem downgrade_spec (γ : GName) (a : Handle T) (v : T) :
 The last strong reference out hands back a *weak* one. That is not bookkeeping
 noise: Rust's `Arc` keeps a single weak reference on behalf of all the strong
 ones, so that the control block outlives the payload. The payload is freed here;
-the two counter cells go when the last weak leaves. -/
+the two counter cells go when the last weak leaves.
+
+`n` is quantified plainly and the post says `n - 1`, rather than the
+precondition asking for `arcAuth γ (n + 1) m`. The truncation is harmless
+because `isArc` already entails `n > 0`, and stating it that way would make the
+client produce a shape it has no reason to have -- the point of the linear token
+is that the positivity travels with it. -/
 theorem dropStrong_spec (γ : GName) (a : Handle T) (v : T) :
     ⊢ isArc γ a v -∗
-      ⟪ ∀ n m, arcAuth (T := T) γ (n + 1) m ⟫ (AH GF) (dropStrong (E := RustEffect) a) @ (∅ : CoPset)
-      ⟪ arcAuth (T := T) γ n (if n = 0 then m + 1 else m)
-      | RET (decide (n = 0)); if n = 0 then isWeak γ a v else emp ⟫ := by
+      ⟪ ∀ n m, arcAuth (T := T) γ n m ⟫ (AH GF) (dropStrong (E := RustEffect) a) @ (∅ : CoPset)
+      ⟪ arcAuth (T := T) γ (n - 1) (if n = 1 then m + 1 else m)
+      | RET (decide (n = 1)); if n = 1 then isWeak γ a v else emp ⟫ := by
   sorry
 
 /-! ## Weak references
@@ -162,13 +170,14 @@ theorem weakStrongCount_spec (γ : GName) (a : Handle T) (v : T) :
 
 /-- **`weakDrop`** on a live weak reference. Mirrors `weak_drop_spec`.
 
-The last weak reference out frees the control block, which is why the authority
-it leaves behind is `arcAuth γ 0 0` -- nothing left to own. -/
+Dropping a weak reference says nothing about the strong count: weak and strong
+references are released independently, and it is only when *both* counts reach
+zero that the control block goes. -/
 theorem weakDrop_spec (γ : GName) (a : Handle T) (v : T) :
     ⊢ isWeak γ a v -∗
-      ⟪ ∀ m, arcAuth (T := T) γ 0 (m + 1) ⟫
+      ⟪ ∀ n m, arcAuth (T := T) γ n m ⟫
         (AH GF) (weakDrop (E := RustEffect) (.live a)) @ (∅ : CoPset)
-      ⟪ arcAuth (T := T) γ 0 m | RET () ⟫ := by
+      ⟪ arcAuth (T := T) γ n (m - 1) | RET () ⟫ := by
   sorry
 
 /-! ## Dangling weak references
