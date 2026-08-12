@@ -1,17 +1,19 @@
-import AeneasIris.AtomicP
+import Iris.BI.Lib.Atomic
 import AeneasIris.wpi
 
 /-!
 # Logically atomic triples for `wpi`
 
-The triple that goes with `AtomicP.atomicUpdate`: the client is handed an atomic
+The triple that goes with `Iris.atomicUpdate`: the client is handed an atomic
 update, and must produce a `wpi`.
 
-This is `Iris/ProgramLogic/Atomic.lean` with the telescopes removed. The removal
-is not cosmetic there either -- the reference spells out `Tele.cons`, `Tele.app`
-and `ULift.up` by hand in *every* macro rule, so a new arity means a new rule,
-and the rules are not interchangeable. Packing puts the arity inside the type,
-so the definition and the notation are each written once.
+The update itself now comes from `Iris.BI.Lib.Atomic`; only the triple is here,
+because it is stated over `wpi` rather than over a `Language`'s `WP`.
+
+One macro rule covers every combination of the three optional groups --
+post-binders, `RET`-binders, `POST` -- because the arity is inside the packed
+type. Compare `Iris/ProgramLogic/Atomic.lean` before the packing, which needed
+one rule per combination, each spelling out its own scaffolding.
 
 `auUncurry` is what makes this work for `f` and `POST` as well as for the
 predicates: its codomain is an unconstrained `Type _`, so the same packing that
@@ -21,7 +23,7 @@ folds `α : A → PROP` folds `f : A → B → P → V` and
 
 namespace AeneasIris.AtomicWpi
 
-open Iris BI Aeneas.Data.Coinductive AeneasIris AeneasIris.AtomicP
+open Iris BI Aeneas.Data.Coinductive AeneasIris
 
 section
 
@@ -85,7 +87,6 @@ syntax "⟪ " ("∃ " ident+ ", ")? term " | " (ident+ ", ")? "RET " term ("; " 
 syntax:max ppRealFill(awPre ppSpace term:arg ppSpace term:arg " @ " term:arg
   ppSpace awPost) : term
 
-open AeneasIris.AtomicP in
 macro_rules
   | `(⟪ $[∀ $xs* , ]? $α:term ⟫ $Hd:term $t:term @ $E:term
       ⟪ $[∃ $ys* , ]? $β:term | $[$zs* , ]? RET $v:term $[; $post:term]? ⟫) => do
@@ -110,7 +111,38 @@ end Notation
 /-! ## Display -/
 
 section Delab
-open Lean PrettyPrinter Delaborator SubExpr Aeneas.Std.Delab AeneasIris.AtomicP
+open Lean PrettyPrinter Delaborator SubExpr Iris.Delab
+
+/-- Like `Iris.Delab.enterUncurryChain`, but silent about the binder that
+`buildAuLam` emits for an *empty* group.
+
+The triple has three optional groups, so it needs to tell "no binders" from "one
+binder the body ignores"; the update, having one group per side, does not. The
+marker is the `Unit` ascription `buildAuLam` puts on the empty case, and both
+halves of the test are needed -- `f` in a triple is usually just the innermost
+variable and ignores every binder above it. -/
+private partial def enterAuChain (acc : Array BinderEntry)
+    (k : Array BinderEntry → DelabM α) : DelabM α := do
+  match (← getExpr) with
+  | .lam n ty b _ =>
+    if ty.isConstOf ``Unit && !b.hasLooseBVars then
+      withBindingBody' n pure fun _ => enterAuChain acc k
+    else
+      let pos ← getPos
+      withBindingBody' n pure fun fv => enterAuChain (acc.push (fv.fvarId!, n, pos)) k
+  | e =>
+    if e.isAppOfArity ``Iris.auUncurry 4 then withAppArg <| enterAuChain acc k
+    else k acc
+
+/-- Peel a packed family into `(binders, body)`. -/
+private def delabAuFamily : DelabM (Array Term × Term) :=
+  enterAuChain #[] fun entries => delabBinders entries.toList delab
+
+/-- The notation takes identifiers, so anything `delabBinders` turned into a
+pattern cannot be printed this way; give up and let the default delaborator show
+the raw term rather than print something misleading. -/
+private def toIdents (ts : Array Term) : DelabM (Array Ident) :=
+  ts.mapM fun t => if t.raw.isIdent then pure ⟨t.raw⟩ else failure
 
 /-- Peel a packed family whose leaf is an `Option`, returning the leaf only when
 it is `some`. Used for `POST`, which is absent in most specs. -/

@@ -1,6 +1,6 @@
 import AeneasIris.wpi
 import AeneasIris.Rules
-import AeneasIris.Concurrency
+import AeneasIris.Conc
 import AeneasIris.Fail
 import AeneasIris.Step
 import AeneasIris.Heap
@@ -13,8 +13,7 @@ import AeneasIris.RustHandler
 import AeneasIris.ISpec
 import AeneasIris.Triple
 import AeneasIris.Tactics
-import AeneasIris.ConcurrencyAPI
+import AeneasIris.ConcAPI
 import AeneasIris.Zoo
 import AeneasIris.Test
-import AeneasIris.AtomicP
 import AeneasIris.AtomicWpi

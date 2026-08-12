@@ -1,5 +1,6 @@
 import AeneasIris.RwLock
 import AeneasIris.Tactics
+import Iris.BI.Lib.Atomic
 import AeneasIris.AtomicWpi
 
 /-!
@@ -30,7 +31,7 @@ invariant is itself waiting for the lock — so ruling it out is the point, not 
 cost. The specs below say exactly this: `try_write` is stated at an arbitrary
 mask, `write_acquire` at `⊤`.
 
-The updates use `AeneasIris.AtomicP`, which admits any number of binders per
+The updates use `Iris.atomicUpdate`, which admits any number of binders per
 side. That is why these specs can say `isRwLock γ lk s v` -- with a single
 binder per side the state and the value have to be packed by hand into one
 variable, and every occurrence reads `sv.1` / `sv.2`. The same goes for `write`
@@ -43,7 +44,7 @@ open Iris BI Aeneas.Data.Coinductive
 open AeneasIris AeneasIris.Heap AeneasIris.HeapAPI
 open Aeneas.Std (StateE StepE Loc RustHeap RustEffect Result)
 open AeneasIris.RwLock
-open AeneasIris.AtomicP AeneasIris.AtomicWpi
+open AeneasIris.AtomicWpi
 
 
 section

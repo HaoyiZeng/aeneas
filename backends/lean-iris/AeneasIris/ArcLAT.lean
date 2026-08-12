@@ -1,5 +1,6 @@
 import AeneasIris.Arc
 import AeneasIris.Tactics
+import Iris.BI.Lib.Atomic
 import AeneasIris.AtomicWpi
 
 /-!
@@ -32,7 +33,7 @@ namespace AeneasIris.ArcLAT
 
 open Iris BI Aeneas.Data.Coinductive
 open AeneasIris AeneasIris.Heap AeneasIris.HeapAPI
-open AeneasIris.AtomicP AeneasIris.AtomicWpi
+open AeneasIris.AtomicWpi
 open Aeneas.Std (StateE StepE Loc RustHeap RustEffect Result)
 open AeneasIris.Arc
 
@@ -71,20 +72,12 @@ theorem deref_spec (γ : GName) (a : Handle T) (v : T) (M : CoPset) :
   simp only [Arc.isArc] at *
   icases HA with ⟨%q, Hmeta, Hstrong, Hpt⟩
   simp only [Arc.deref]
-  iapply (wpi_load (Hd := AH GF) (m := .later) a.data v (DFrac.own q))
-  iapply (AeneasIris.Step.lat_intro .later _)
-  isplitl [Hpt]
-  · iexact Hpt
-  iintro Hpt
-  imodintro
-  isplitl []
-  · ipureintro; rfl
+  istep
+  isplitr
+  itrivial
   iexists q
-  isplitl [Hmeta]
-  · iexact Hmeta
-  isplitl [Hstrong]
-  · iexact Hstrong
-  iexact Hpt
+  iframe
+
 
 /-- **`strong_count`.** Mirrors `weak_strong_count_spec`'s shape. -/
 theorem strong_count_spec (γ : GName) (a : Handle T) (v : T) :
@@ -109,7 +102,7 @@ theorem clone_spec (γ : GName) (a : Handle T) (v : T) :
   iapply (wpi_bind (H := AH GF) _ _ _ ⊤)
   iapply (wpi_clear_mask (H := AH GF) _ _ ⊤).mp
   /- The linearisation point is the `faa`, so the update is opened here. -/
-  ihave HAC := aupd_acc (PROP := IProp GF) ⊤ ∅ _ _ _ $$ HAU
+  ihave HAC := aupd_acc _ _ _ ⊤ ∅ ⊤ (by simp) $$ HAU
   imod HAC with ⟨%n, %m, HAuth, Hclose⟩
   simp only [auUncurry_pair] at *
   /- TODO: the rest needs two algebraic laws that are not proved yet:
