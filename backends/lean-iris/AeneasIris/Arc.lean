@@ -168,7 +168,9 @@ the metadata is what stops two handles from disagreeing about it. -/
 def arcAuth (γ : GName) (n m : Nat) : IProp GF := iprop(
   ∃ a : Handle T, ∃ v : T,
     physical a n m ∗
-    (match n with | 0 => iprop(emp) | _ + 1 => iprop(a.data ↦ v)) ∗
+    (match n with
+     | 0 => iprop(emp)
+     | _ + 1 => iprop(∃ qrest : Qp, pointsTo a.data (DFrac.own qrest) v)) ∗
     iOwn (F := ArcF T) γ (● res (some (a, v)) n m))
 
 /-- Agreement on which allocation and payload a ghost name denotes. Carries no
@@ -184,9 +186,20 @@ def arcStrongOwn (γ : GName) : IProp GF :=
 def arcWeakOwn (γ : GName) : IProp GF :=
   iprop(iOwn (F := ArcF T) γ (◯ res (T := T) none 0 1))
 
-/-- One strong reference. -/
+/-- One strong reference: agreement, a strong credit, and a share of the
+payload cell.
+
+The share is what makes `deref` an ordinary read rather than something that has
+to open the authority -- `Arc` hands out shared access, so a fraction is exactly
+right. It is existential because no client statement names it: how much of the
+cell a reference is worth is the library's business. `RwLock.readGuardFrac` says
+the same thing the same way.
+
+The shares are what the last `dropStrong` reassembles before freeing the
+payload, so the authority holds the residual. -/
 def isArc (γ : GName) (a : Handle T) (v : T) : IProp GF :=
-  iprop(arcMetaOwn γ a v ∗ arcStrongOwn (T := T) γ)
+  iprop(∃ q : Qp, arcMetaOwn γ a v ∗ arcStrongOwn (T := T) γ ∗
+    pointsTo a.data (DFrac.own q) v)
 
 /-- One weak reference. -/
 def isWeak (γ : GName) (a : Handle T) (v : T) : IProp GF :=

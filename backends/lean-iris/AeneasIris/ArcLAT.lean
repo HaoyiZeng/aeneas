@@ -52,17 +52,30 @@ theorem new_spec (v : T) (Φ : Post GF (Handle T)) :
 
 /-! ## Strong references -/
 
-/-- **`deref`.** Atomic, unlike the reference -- see the note above.
+/-- **`deref`.** Mirrors `deref_spec`: an ordinary read, no update involved.
 
-The payload read is the one the metadata agrees on, which is what makes the
-`RET v` meaningful: `isArc γ a v` already fixes `v` -- and, with it, that there
-is still a payload to read. Nothing about the count belongs in the
-precondition. -/
-theorem deref_spec (γ : GName) (a : Handle T) (v : T) :
-    ⊢ isArc γ a v -∗
-      ⟪ ∀ n m, arcAuth (T := T) γ n m ⟫ (AH GF) (deref (E := RustEffect) a) @ (∅ : CoPset)
-      ⟪ arcAuth (T := T) γ n m | RET v; isArc γ a v ⟫ := by
-  sorry
+`isArc` carries a share of the payload cell, so dereferencing needs nothing
+shared -- which is what makes `Arc` useful in the first place. The value read is
+the one the metadata agrees on, so `RET v` is determined by `isArc γ a v`. -/
+theorem deref_spec (γ : GName) (a : Handle T) (v : T) (Φ : Post GF T) :
+    iprop(isArc γ a v ∗ (isArc γ a v -∗ Φ v))
+      ⊢ wpi_mask GF (AH GF) (deref (E := RustEffect) a) (fun r => Φ r) ⊤ := by
+  iintro ⟨HA, Hk⟩
+  icases HA with ⟨%q, Hmeta, Hstrong, Hpt⟩
+  simp only [Arc.deref]
+  iapply (wpi_load (Hd := AH GF) (m := .later) a.data v (DFrac.own q))
+  iapply (lat_intro .later _)
+  isplitl [Hpt]
+  · iexact Hpt
+  iintro Hpt
+  imodintro
+  iapply Hk
+  iexists q
+  isplitl [Hmeta]
+  · iexact Hmeta
+  isplitl [Hstrong]
+  · iexact Hstrong
+  iexact Hpt
 
 /-- **`strong_count`.** Mirrors `weak_strong_count_spec`'s shape. -/
 theorem strong_count_spec (γ : GName) (a : Handle T) (v : T) :
