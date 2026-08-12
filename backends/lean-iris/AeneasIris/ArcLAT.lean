@@ -61,10 +61,12 @@ theorem deref_spec (γ : GName) (a : Handle T) (v : T) (Φ : Post GF T) :
     iprop(isArc γ a v ∗ (isArc γ a v -∗ Φ v))
       ⊢ wpi_mask GF (AH GF) (deref (E := RustEffect) a) (fun r => Φ r) ⊤ := by
   iintro ⟨HA, Hk⟩
+  /- `icases` does not see through a `def`, so unfold `isArc` first. -/
+  simp only [Arc.isArc] at *
   icases HA with ⟨%q, Hmeta, Hstrong, Hpt⟩
   simp only [Arc.deref]
   iapply (wpi_load (Hd := AH GF) (m := .later) a.data v (DFrac.own q))
-  iapply (lat_intro .later _)
+  iapply (AeneasIris.Step.lat_intro .later _)
   isplitl [Hpt]
   · iexact Hpt
   iintro Hpt
