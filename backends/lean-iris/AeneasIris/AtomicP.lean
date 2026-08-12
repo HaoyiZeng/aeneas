@@ -152,11 +152,16 @@ open Lean
 
 /-- Fold binders into a packed family: `[x, y, z]` ↦ `auUncurry fun x => auUncurry fun y z => …`.
 
-A single binder is left curried, so the common case introduces no packing. -/
+A single binder is left curried, so the common case introduces no packing.
+
+No binders at all still needs *a* binder, and it is typed `Unit` on purpose:
+`fun _ => body` and `fun x => body` are the same shape, so without the ascription
+the delaborator could not tell "no binders" from "one binder the body ignores".
+-/
 partial def buildAuLam (xs : List Ident) (body : Term) : MacroM Term := do
   let u := mkIdent ``auUncurry
   match xs with
-  | []        => `(fun _ => $body)
+  | []        => `(fun (_ : Unit) => $body)
   | [x]       => `(fun $x => $body)
   | [a, b]    => `($u (fun $a $b => $body))
   | a :: rest => do `($u (fun $a => $(← buildAuLam rest body)))
@@ -205,32 +210,35 @@ open Lean PrettyPrinter Delaborator SubExpr Aeneas.Std.Delab
 The `auUncurry` analogue of `enterUncurryChain`; the difference is only which
 head symbol is chased, and it matters: `Std.uncurry` prints as a *tuple* binder,
 `auUncurry` as separate binders. -/
-private partial def enterAuChain (acc : Array BinderEntry)
+partial def enterAuChain (acc : Array BinderEntry)
     (k : Array BinderEntry → DelabM α) : DelabM α := do
   match (← getExpr) with
-  | .lam n _ b _ =>
-    if b.hasLooseBVars then
+  | .lam n ty b _ =>
+    if ty.isConstOf ``Unit && !b.hasLooseBVars then
+      /- How `buildAuLam` encodes *no* binders. Enter it but do not report it,
+         so the round trip is exact; recurse, since with no binders on either
+         side the encoding is two nested such lambdas.
+
+         Both halves of the test are needed. A `Unit` binder alone could be one
+         the user really wrote; an unused binder alone is routine -- `f` in a
+         triple is usually just the innermost variable, and ignores every
+         binder above it. -/
+      withBindingBody' n pure fun _ => enterAuChain acc k
+    else
       let pos ← getPos
       withBindingBody' n pure fun fv => enterAuChain (acc.push (fv.fvarId!, n, pos)) k
-    else
-      /- A binder the body never mentions: this is how `buildAuLam` encodes
-         *no* binders (`fun _ => body`), which is the common case on the commit
-         side. Enter it, but do not report it, so the round trip is exact.
-         Recurse rather than stop: with no binders on *either* side the encoding
-         is two nested vacuous lambdas. -/
-      withBindingBody' n pure fun _ => enterAuChain acc k
   | e =>
     if e.isAppOfArity ``auUncurry 4 then withAppArg <| enterAuChain acc k
     else k acc
 
 /-- Peel a packed family into `(binders, body)`. -/
-private def delabAuFamily : DelabM (Array Term × Term) :=
+def delabAuFamily : DelabM (Array Term × Term) :=
   enterAuChain #[] fun entries => delabBinders entries.toList delab
 
 /-- The notation takes identifiers, so anything `delabBinders` turned into a
 pattern (a tuple, a constructor) cannot be printed this way; give up and let the
 default delaborator show the raw term rather than print something misleading. -/
-private def toIdents (ts : Array Term) : DelabM (Array Ident) :=
+def toIdents (ts : Array Term) : DelabM (Array Ident) :=
   ts.mapM fun t => if t.raw.isIdent then pure ⟨t.raw⟩ else failure
 
 /-- `atomicUpdate Eo Ei α β Φ` → `AU ⟪ ∃ x.., α ⟫ @ Eo, Ei ⟪ ∀ y.., β, COMM Φ ⟫`.
