@@ -1,4 +1,7 @@
 import AeneasIris.HeapAPI
+import Iris.Instances.Lib.LaterCredits
+import Iris.Algebra.Auth
+import Iris.Algebra.Agree
 
 namespace AeneasIris.Arc
 
@@ -85,6 +88,14 @@ noncomputable def weakDrop (w : WeakHandle T) : ITree E Unit :=
       else
         return ()
 
+/-! No `yield` here: this is a CAS retry, not a wait.
+
+The loop exits as soon as no other thread interferes with the count, so running
+on is what makes it finish — unlike `RwLock.read_acquire`, which cannot exit
+until another thread releases the lock and therefore must yield. Upgrading also
+fails outright (`.inr none`) once the strong count hits zero, so there is
+nothing to wait *for*. -/
+
 noncomputable def tryUpgrade (a : Handle T) : ITree E (Option (Handle T)) :=
   ITree.iter (fun _ => do
     let n : Int ← load a.strong
@@ -117,6 +128,71 @@ def physical (a : Handle T) : Nat → Nat → IProp GF
   | (n + 1), m => iprop(a.strong ↦ ((n : Int) + 1) ∗ a.weak ↦ ((m : Int) + 1))
 
 def isDanglingWeak (w : WeakHandle T) : Prop := w = .dangling
+
+/-! ## Ghost state
+
+Every piece here is stock Iris. `Option (Agree ·)` pins which allocation and
+which payload a ghost name is talking about, so two handles carrying the same
+`γ` cannot disagree. The two `Credit`s (`= Nat`, from `LaterCredits`) are the
+strong and weak counts: a `Nat` has a unit, which is what lets a single handle
+be a fragment holding `(1, 0)` or `(0, 1)` and nothing else.
+
+The `ULift` is for universes only -- `iOwn` wants `OFunctorPre.{1,1,1}` and the
+payload lives in `Type 0`. `RwSpinF` does the same. -/
+
+abbrev ArcMeta (T : Type) := LeibnizO (Handle T × T)
+abbrev ArcRes (T : Type) := ULift.{1} (Option (Agree (ArcMeta T)) × (Credit × Credit))
+abbrev ArcF (T : Type) : COFE.OFunctorPre.{1,1,1} := Auth.AuthURF (constOF (ArcRes T))
+
+class ArcG (GF : BundledGFunctors) (T : Type) where
+  [arcG : ElemG GF (ArcF T)]
+
+attribute [reducible, instance] ArcG.arcG
+
+section Ghost
+variable [ArcG GF T]
+
+/-- A resource: optional agreement on the allocation, plus credits.
+
+Agreement and credits are separated in the *fragments* below because they behave
+differently -- the agreement is duplicable, a credit is not. -/
+def res (md : Option (Handle T × T)) (n m : Nat) : ArcRes T :=
+  ULift.up (md.map (fun x => toAgree (LeibnizO.mk x)), (n, m))
+
+/-- The authority: the physical control block, the payload while anyone still
+holds it, and the counts.
+
+`a` and `v` are existential because no client statement names them -- which
+allocation backs a ghost name is the library's business, and the agreement in
+the metadata is what stops two handles from disagreeing about it. -/
+def arcAuth (γ : GName) (n m : Nat) : IProp GF := iprop(
+  ∃ a : Handle T, ∃ v : T,
+    physical a n m ∗
+    (match n with | 0 => iprop(emp) | _ + 1 => iprop(a.data ↦ v)) ∗
+    iOwn (F := ArcF T) γ (● res (some (a, v)) n m))
+
+/-- Agreement on which allocation and payload a ghost name denotes. Carries no
+credit, so it is duplicable. -/
+def arcMetaOwn (γ : GName) (a : Handle T) (v : T) : IProp GF :=
+  iprop(iOwn (F := ArcF T) γ (◯ res (some (a, v)) 0 0))
+
+/-- One strong credit, and nothing else. -/
+def arcStrongOwn (γ : GName) : IProp GF :=
+  iprop(iOwn (F := ArcF T) γ (◯ res (T := T) none 1 0))
+
+/-- One weak credit. -/
+def arcWeakOwn (γ : GName) : IProp GF :=
+  iprop(iOwn (F := ArcF T) γ (◯ res (T := T) none 0 1))
+
+/-- One strong reference. -/
+def isArc (γ : GName) (a : Handle T) (v : T) : IProp GF :=
+  iprop(arcMetaOwn γ a v ∗ arcStrongOwn (T := T) γ)
+
+/-- One weak reference. -/
+def isWeak (γ : GName) (a : Handle T) (v : T) : IProp GF :=
+  iprop(arcMetaOwn γ a v ∗ arcWeakOwn (T := T) γ)
+
+end Ghost
 
 instance (a : Handle T) (n m : Nat) : Timeless (PROP := IProp GF) (physical a n m) := by
   cases n <;> cases m <;> (unfold physical; infer_instance)
