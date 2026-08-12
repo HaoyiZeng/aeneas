@@ -136,6 +136,20 @@ theorem aupd_unfold {A B : Type _} (Eo Ei : CoPset)
   exact greatest_fixpoint_unfold_mp
     (F := fun Ψ (_ : Unit) => atomicAcc Eo Ei α (Ψ ()) β Φ) (x := ())
 
+/-- Opening, in the form proofs actually use.
+
+`aupd_unfold` states the same thing in terms of `atomicAcc`, but a proof would
+then have to unfold that -- and `simp only [atomicAcc] at H` does not reach a
+proof-mode hypothesis, so the unfolding has to happen here. `Iris.aupd_acc`
+serves the same purpose in the telescoped development. -/
+theorem aupd_acc {A B : Type _} (Eo Ei : CoPset)
+    (α : A → PROP) (β Φ : A → B → PROP) :
+    atomicUpdate Eo Ei α β Φ ⊢
+    iprop(|={Eo,Ei}=> ∃ x, α x ∗
+      ((α x ={Ei,Eo}=∗ atomicUpdate Eo Ei α β Φ) ∧
+       (∀ y, β x y ={Ei,Eo}=∗ Φ x y))) :=
+  aupd_unfold Eo Ei α β Φ
+
 /-! ## Notation
 
 `AU ⟪ ∃ x y z, α ⟫ @ Eo, Ei ⟪ ∀ u v, β, COMM Φ ⟫`, with any number of binders

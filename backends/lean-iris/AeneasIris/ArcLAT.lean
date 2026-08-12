@@ -77,6 +77,25 @@ theorem clone_spec (γ : GName) (a : Handle T) (v : T) :
     ⊢ isArc γ a v -∗
       ⟪ ∀ n m, arcAuth (T := T) γ n m ⟫ (AH GF) (clone (E := RustEffect) a) @ (∅ : CoPset)
       ⟪ arcAuth (T := T) γ (n + 1) m | RET a; isArc γ a v ∗ isArc γ a v ⟫ := by
+  iintro HA
+  have hm : (⊤ : CoPset) \ (∅ : CoPset) = (⊤ : CoPset) := by simp
+  simp only [atomicWpi, hm]
+  iintro %Φ HAU
+  simp only [Arc.clone]
+  iapply (wpi_bind (H := AH GF) _ _ _ ⊤)
+  iapply (wpi_clear_mask (H := AH GF) _ _ ⊤).mp
+  /- The linearisation point is the `faa`, so the update is opened here. -/
+  ihave HAC := aupd_acc (PROP := IProp GF) ⊤ ∅ _ _ _ $$ HAU
+  imod HAC with ⟨%n, %m, HAuth, Hclose⟩
+  simp only [auUncurry_pair] at *
+  /- TODO: the rest needs two algebraic laws that are not proved yet:
+       - agreement: `arcAuth γ n m ∗ isArc γ a v ⊢ ⌜n > 0⌝`, and that the
+         authority's existentials are exactly this `a` and `v`, so that
+         `a.strong ↦ ·` can be extracted from `physical`;
+       - allocation: `● res (some (a,v)) n m ⇝ ● res (some (a,v)) (n+1) m ∗ ◯ res none 1 0`,
+         a local update on the strong `Credit`.
+     With those, this closes by `wpi_faa (M := ∅)` and the commit branch of
+     `Hclose`. -/
   sorry
 
 /-- **`downgrade`.** Mirrors `downgrade_spec`: the strong reference is kept and a
@@ -157,33 +176,41 @@ theorem weakDrop_spec (γ : GName) (a : Handle T) (v : T) :
 Pure sentinels: nothing is allocated, so nothing is owned and no update is
 needed. -/
 
-/-- **`weakClone`** on a dangling reference. -/
+/- **`weakClone`** on a dangling reference. -/
+omit [Nonempty T] [ArcG GF T] in
 theorem dangling_clone_spec (Φ : Post GF (WeakHandle T)) :
     iprop(Φ .dangling)
       ⊢ wpi_mask GF (AH GF) (weakClone (E := RustEffect) (T := T) .dangling)
           (fun w => Φ w) ⊤ := by
-  sorry
+  simp only [Arc.weakClone]
+  exact wpi_ret _ _ _
 
-/-- **`weakUpgrade`** on a dangling reference always fails. -/
+/- **`weakUpgrade`** on a dangling reference always fails. -/
+omit [Nonempty T] [ArcG GF T] in
 theorem dangling_upgrade_spec (Φ : Post GF (Option (Handle T))) :
     iprop(Φ none)
       ⊢ wpi_mask GF (AH GF) (weakUpgrade (E := RustEffect) (T := T) .dangling)
           (fun r => Φ r) ⊤ := by
-  sorry
+  simp only [Arc.weakUpgrade]
+  exact wpi_ret _ _ _
 
-/-- **`weakStrongCount`** on a dangling reference is `0`. -/
+/- **`weakStrongCount`** on a dangling reference is `0`. -/
+omit [Nonempty T] [ArcG GF T] in
 theorem dangling_strong_count_spec (Φ : Post GF Int) :
     iprop(Φ 0)
       ⊢ wpi_mask GF (AH GF) (weakStrongCount (E := RustEffect) (T := T) .dangling)
           (fun r => Φ r) ⊤ := by
-  sorry
+  simp only [Arc.weakStrongCount]
+  exact wpi_ret _ _ _
 
-/-- **`weakDrop`** on a dangling reference does nothing. -/
+/- **`weakDrop`** on a dangling reference does nothing. -/
+omit [Nonempty T] [ArcG GF T] in
 theorem dangling_drop_spec (Φ : Post GF Unit) :
     iprop(Φ ())
       ⊢ wpi_mask GF (AH GF) (weakDrop (E := RustEffect) (T := T) .dangling)
           (fun u => Φ u) ⊤ := by
-  sorry
+  simp only [Arc.weakDrop]
+  exact wpi_ret _ _ _
 
 end
 
