@@ -105,6 +105,23 @@ theorem write_spec (γ : GName) (lk : Handle T) :
                    ⟪ isRwLock γ lk .free v₁ | RET () ⟫) ⟫ := by
   sorry
 
+/-- **`write_release`.**
+
+`MultiShot` hands the release back inside `try_write`'s postcondition, because
+there the returned value carries the closure. Ours returns a bare
+`Option (WriteGuard T)`, so the release has to be stated on its own -- otherwise
+a caller that acquires with `try_write` holds a guard it can never give up.
+`write_spec` still returns it too, as the reference does.
+
+`v₁` need not be the value acquired: the point of a write guard is that it may
+be changed. -/
+theorem write_release_spec (γ : GName) (g : WriteGuard T) (v₁ : T) :
+    ⊢ writeGuard γ g.lock v₁ -∗
+      ⟪ ∀ v₀, isRwLock γ g.lock .write v₀ ⟫
+        (RH GF) (write_release (E := RustEffect) g) @ (∅ : CoPset)
+      ⟪ isRwLock γ g.lock .free v₁ | RET () ⟫ := by
+  sorry
+
 /-! ## Read
 
 Same shape, with the reader count doing the work `free`/`write` does above:
@@ -139,6 +156,19 @@ theorem read_spec (γ : GName) (lk : Handle T) :
                    | RET () ⟫) ⟫ := by
   sorry
 
+/-- **`read_release`.** The counterpart of `write_release`, for the same reason.
+
+The disjunction mirrors `read_spec`'s: the reader leaving may or may not be the
+last one. -/
+theorem read_release_spec (γ : GName) (g : ReadGuard T) (v : T) :
+    ⊢ readGuardFrac γ g.lock 1 v -∗
+      ⟪ ∀ s, isRwLock γ g.lock s v ⟫
+        (RH GF) (read_release (E := RustEffect) g) @ (∅ : CoPset)
+      ⟪ (isRwLock γ g.lock .free v ∗ ⌜s = .read 0⌝) ∨
+        (∃ n : Nat, isRwLock γ g.lock (.read n) v ∗ ⌜s = .read (n + 1)⌝)
+      | RET () ⟫ := by
+  sorry
+
 /-! ## Dereference
 
 Plain Hoare triples: a guard is already exclusive (write) or fractional (read),
@@ -155,6 +185,34 @@ theorem read_deref_spec (γ : GName) (g : ReadGuard T) (q : Qp) (v : T)
     (Φ : Post GF T) :
     iprop(readGuardFrac γ g.lock q v ∗ (readGuardFrac γ g.lock q v -∗ Φ v))
       ⊢ wpi_mask GF (RH GF) (read_deref (E := RustEffect) g) (fun r => Φ r) ⊤ := by
+  sorry
+
+/-- **`write_deref_mut`.** Mirrors `write_deref_mut_spec`.
+
+Aeneas returns three things where the reference returns two: the value, the
+backward function of the `&mut T` that was handed out, and the backward function
+of `self`. The second is the reference's `set`; the third is the identity, since
+the guard itself is unchanged. -/
+theorem write_deref_mut_spec (γ : GName) (g : WriteGuard T) (v : T)
+    (Φ : Post GF (T × (T → ITree RustEffect (WriteGuard T)) ×
+                      (WriteGuard T → ITree RustEffect (WriteGuard T)))) :
+    iprop(writeGuard γ g.lock v ∗
+          (∀ set back,
+             writeGuard γ g.lock v -∗
+             □ (∀ v₀ : T, ∀ v' : T, writeGuard γ g.lock v₀ -∗
+                  wpi_mask GF (RH GF) (set v')
+                    (fun g' => iprop(⌜g' = g⌝ ∗ writeGuard γ g.lock v')) ⊤) -∗
+             Φ (v, set, back)))
+      ⊢ wpi_mask GF (RH GF) (write_deref_mut (E := RustEffect) g) (fun r => Φ r) ⊤ := by
+  sorry
+
+/-! ## Deallocation -/
+
+/-- **`drop`.** Mirrors `drop_spec`: only a free lock may be dropped, which is
+what having `isRwLock γ lk .free v` in hand means. -/
+theorem drop_spec (γ : GName) (lk : Handle T) (v : T) (Φ : Post GF Unit) :
+    iprop(isRwLock γ lk .free v ∗ Φ ())
+      ⊢ wpi_mask GF (RH GF) (drop (E := RustEffect) lk) (fun u => Φ u) ⊤ := by
   sorry
 
 end
