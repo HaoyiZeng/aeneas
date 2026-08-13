@@ -243,6 +243,27 @@ theorem arcAuth_meta_agree (γ : GName) (a a' : Handle T) (v v' : T) (n m : Nat)
   have : (a, v) = (a', v') := LeibnizO.dist_inj heq
   grind
 
+/-! Both facts above are pure, so they can be read off without giving up the
+resources they were read from.  The `$$ [...]` form of `ihave` consumes what it
+is handed, so the callers want these variants. -/
+
+/-- A pure consequence can be taken without spending the hypothesis. -/
+private theorem keep_pure {P : IProp GF} {φ : Prop} (h : P ⊢ iprop(⌜φ⌝)) :
+    P ⊢ iprop(⌜φ⌝ ∗ P) :=
+  (BI.and_intro h .rfl).trans BI.persistent_and_sep_mp
+
+theorem arcAuth_strong_pos_keep (γ : GName) (md : Option (Handle T × T)) (n m : Nat) :
+    iprop(iOwn (F := ArcF T) γ (● res md n m) ∗ arcStrongOwn (T := T) γ)
+      ⊢@{IProp GF} iprop(⌜1 ≤ n⌝ ∗
+        (iOwn (F := ArcF T) γ (● res md n m) ∗ arcStrongOwn (T := T) γ)) :=
+  keep_pure (arcAuth_strong_pos γ md n m)
+
+theorem arcAuth_meta_agree_keep (γ : GName) (a a' : Handle T) (v v' : T) (n m : Nat) :
+    iprop(iOwn (F := ArcF T) γ (● res (some (a', v')) n m) ∗ arcMetaOwn γ a v)
+      ⊢@{IProp GF} iprop(⌜a' = a ∧ v' = v⌝ ∗
+        (iOwn (F := ArcF T) γ (● res (some (a', v')) n m) ∗ arcMetaOwn γ a v)) :=
+  keep_pure (arcAuth_meta_agree γ a a' v v' n m)
+
 end Ghost
 
 instance (a : Handle T) (n m : Nat) : Timeless (PROP := IProp GF) (physical a n m) := by
