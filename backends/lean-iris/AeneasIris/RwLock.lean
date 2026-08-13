@@ -320,7 +320,27 @@ theorem isRwLock_exclusive (γ : GName) (lk : Handle T) (s₁ s₂ : LockState) 
 /-- A read permit pins the lock to a read state. -/
 theorem readGuardFrac_state (γ : GName) (lk : Handle T) (s : LockState) (q : Qp) (v v' : T) :
     iprop(isRwLock γ lk s v ∗ readGuardFrac γ lk q v') ⊢@{IProp GF} iprop(⌜∃ n, s = .read n⌝) := by
-  sorry
+  rcases s with _ | n | _
+  all_goals (iintro ⟨H1, H2⟩;
+             simp only [isRwLock, readGuardFrac, rwCore] at *)
+  · /- free: the core owns the whole cell, the permit a share of it. -/
+    icases H1 with ⟨_, _, Hd1⟩
+    icases H2 with ⟨%sq, _, Hd2⟩
+    simp only [pointsToC] at *
+    ihave %hne := ghost_map_elem_ne _ _ _ _ _ _ $$ Hd1 Hd2
+    exact absurd rfl hne
+  · ipureintro; exact ⟨n, rfl⟩
+  · /- write: `● none` cannot contain the permit's `◯ (some _)`. -/
+    icases H1 with ⟨_, Hown1⟩
+    icases H2 with ⟨%sq, Hown2, _⟩
+    ihave Hboth : iprop(iOwn (F := RwSpinF) γ _ ∗ iOwn (F := RwSpinF) γ _) $$ [Hown1 Hown2]
+    · isplitl [Hown1]
+      · iexact Hown1
+      · iexact Hown2
+    ihave %hv := iOwn_cmraValid_op $$ Hboth
+    exfalso
+    obtain ⟨⟨z⟩, hz⟩ := (Auth.auth_both_valid.mp hv).1 0
+    cases z <;> simp_all [CMRA.op]
 
 /-- ... and agrees with it on the contents. -/
 theorem readGuardFrac_agree (γ : GName) (lk : Handle T) (s : LockState) (q : Qp) (v v' : T) :
@@ -351,10 +371,19 @@ theorem readGuardFrac_agree (γ : GName) (lk : Handle T) (s : LockState) (q : Qp
     exact Val.eq_of_Is (congrArg Prod.snd heq)
   · /- write: the core holds no cell at all, so there is nothing to agree with.
     The contradiction is algebraic instead -- the write authority is `● none`,
-    and a read permit carries `◯ (some _)`, whose composition is invalid.
-    TODO: `iOwn_cmraValid_op` gives `✓ (● none) • ◯ (some _)`; finish with the
-    `Auth` inclusion lemma (`some _ ≼ none` is impossible). -/
-    sorry
+    and a read permit carries `◯ (some _)`, which would have to be included in
+    it. -/
+    icases H1 with ⟨_, Hown1⟩
+    icases H2 with ⟨%sq, Hown2, _⟩
+    ihave Hboth : iprop(iOwn (F := RwSpinF) γ _ ∗ iOwn (F := RwSpinF) γ _) $$ [Hown1 Hown2]
+    · isplitl [Hown1]
+      · iexact Hown1
+      · iexact Hown2
+    ihave %hv := iOwn_cmraValid_op $$ Hboth
+    exfalso
+    have hincl := (Auth.auth_both_valid.mp hv).1 0
+    obtain ⟨⟨z⟩, hz⟩ := hincl
+    cases z <;> simp_all [CMRA.op]
 
 /-- A write guard pins the lock to the write state. -/
 theorem writeGuard_state (γ : GName) (lk : Handle T) (s : LockState) (v v' : T) :
