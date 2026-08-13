@@ -9,14 +9,9 @@ open Iris BI Aeneas.Data.Coinductive
 open AeneasIris AeneasIris.Heap AeneasIris.HeapAPI
 open Aeneas.Std (StateE StepE Loc Val RustHeap)
 open scoped Aeneas.Std
-open AeneasIris.Step (lat LaterModality stepH)
+open AeneasIris.Step (lat stepH)
 
-/-- Model of `my_std::Arc<T>`.
-
-The payload is a *cell*, not a field. `Arc<T>` is a shared pointer: every clone
-must observe the same `T`, so storing it by value would give each clone its own
-copy and lose the only property the type exists for -- `Arc<RwLock<Node>>` would
-hand out unrelated locks. -/
+/-- Model of `my_std::Arc<T>`. -/
 structure Handle (T : Type) where
   strong : Loc
   weak : Loc
@@ -39,10 +34,7 @@ noncomputable def new (x : T) : ITree E (Handle T) := do
   let d ← alloc x
   return ⟨s, w, d⟩
 
-/-- `Deref for Arc`.
-
-A heap read, not a projection -- which is what makes the sharing observable, and
-what the generated signature `Arc T -> Result T` already says. -/
+/-- `Deref for Arc`. -/
 noncomputable def deref (a : Handle T) : ITree E T :=
   load a.data
 
@@ -58,8 +50,7 @@ noncomputable def downgrade (a : Handle T) : ITree E (WeakHandle T) := do
   let _ ← faa a.weak (1 : Int)
   return .live a
 
-/-- Releasing one strong reference. The payload is freed by the last one to
-leave; the two counter cells outlive it and go when the last weak does. -/
+/-- Releasing one strong reference. -/
 noncomputable def dropStrong (a : Handle T) : ITree E Bool := do
   let old : Int ← faa a.strong (-1)
   if old = 1 then
@@ -88,13 +79,7 @@ noncomputable def weakDrop (w : WeakHandle T) : ITree E Unit :=
       else
         return ()
 
-/-! No `yield` here: this is a CAS retry, not a wait.
-
-The loop exits as soon as no other thread interferes with the count, so running
-on is what makes it finish — unlike `RwLock.read_acquire`, which cannot exit
-until another thread releases the lock and therefore must yield. Upgrading also
-fails outright (`.inr none`) once the strong count hits zero, so there is
-nothing to wait *for*. -/
+/-! No `yield` here: this is a CAS retry, not a wait. -/
 
 noncomputable def tryUpgrade (a : Handle T) : ITree E (Option (Handle T)) :=
   ITree.iter (fun _ => do
@@ -129,16 +114,7 @@ def physical (a : Handle T) : Nat → Nat → IProp GF
 
 def isDanglingWeak (w : WeakHandle T) : Prop := w = .dangling
 
-/-! ## Ghost state
-
-Every piece here is stock Iris. `Option (Agree ·)` pins which allocation and
-which payload a ghost name is talking about, so two handles carrying the same
-`γ` cannot disagree. The two `Credit`s (`= Nat`, from `LaterCredits`) are the
-strong and weak counts: a `Nat` has a unit, which is what lets a single handle
-be a fragment holding `(1, 0)` or `(0, 1)` and nothing else.
-
-The `ULift` is for universes only -- `iOwn` wants `OFunctorPre.{1,1,1}` and the
-payload lives in `Type 0`. `RwSpinF` does the same. -/
+/-! ## Ghost state -/
 
 abbrev ArcMeta (T : Type) := LeibnizO (Handle T × T)
 abbrev ArcRes (T : Type) := ULift.{1} (Option (Agree (ArcMeta T)) × (Credit × Credit))
@@ -152,19 +128,11 @@ attribute [reducible, instance] ArcG.arcG
 section Ghost
 variable [ArcG GF T]
 
-/-- A resource: optional agreement on the allocation, plus credits.
-
-Agreement and credits are separated in the *fragments* below because they behave
-differently -- the agreement is duplicable, a credit is not. -/
+/-- A resource: optional agreement on the allocation, plus credits. -/
 def res (md : Option (Handle T × T)) (n m : Nat) : ArcRes T :=
   ULift.up (md.map (fun x => toAgree (LeibnizO.mk x)), (n, m))
 
-/-- The authority: the physical control block, the payload while anyone still
-holds it, and the counts.
-
-`a` and `v` are existential because no client statement names them -- which
-allocation backs a ghost name is the library's business, and the agreement in
-the metadata is what stops two handles from disagreeing about it. -/
+/-- The authority: the physical control block, the payload while anyone still holds it, and the counts. -/
 def arcAuth (γ : GName) (n m : Nat) : IProp GF := iprop(
   ∃ a : Handle T, ∃ v : T,
     physical a n m ∗
@@ -173,8 +141,7 @@ def arcAuth (γ : GName) (n m : Nat) : IProp GF := iprop(
      | _ + 1 => iprop(∃ qrest : Qp, pointsTo a.data (DFrac.own qrest) v)) ∗
     iOwn (F := ArcF T) γ (● res (some (a, v)) n m))
 
-/-- Agreement on which allocation and payload a ghost name denotes. Carries no
-credit, so it is duplicable. -/
+/-- Agreement on which allocation and payload a ghost name denotes. -/
 def arcMetaOwn (γ : GName) (a : Handle T) (v : T) : IProp GF :=
   iprop(iOwn (F := ArcF T) γ (◯ res (some (a, v)) 0 0))
 
@@ -186,17 +153,7 @@ def arcStrongOwn (γ : GName) : IProp GF :=
 def arcWeakOwn (γ : GName) : IProp GF :=
   iprop(iOwn (F := ArcF T) γ (◯ res (T := T) none 0 1))
 
-/-- One strong reference: agreement, a strong credit, and a share of the
-payload cell.
-
-The share is what makes `deref` an ordinary read rather than something that has
-to open the authority -- `Arc` hands out shared access, so a fraction is exactly
-right. It is existential because no client statement names it: how much of the
-cell a reference is worth is the library's business. `RwLock.readGuardFrac` says
-the same thing the same way.
-
-The shares are what the last `dropStrong` reassembles before freeing the
-payload, so the authority holds the residual. -/
+/-- One strong reference: agreement, a strong credit, and a share of the payload cell. -/
 def isArc (γ : GName) (a : Handle T) (v : T) : IProp GF :=
   iprop(∃ q : Qp, arcMetaOwn γ a v ∗ arcStrongOwn (T := T) γ ∗
     pointsTo a.data (DFrac.own q) v)
@@ -204,6 +161,87 @@ def isArc (γ : GName) (a : Handle T) (v : T) : IProp GF :=
 /-- One weak reference. -/
 def isWeak (γ : GName) (a : Handle T) (v : T) : IProp GF :=
   iprop(arcMetaOwn γ a v ∗ arcWeakOwn (T := T) γ)
+
+/-! ### Resource algebra facts
+
+`res` is componentwise: the metadata slot is an `Agree`, so two fragments that
+disagree are already invalid, and the two counters are `Credit = Nat` under
+addition with `0` as unit.  Everything below is read off from those two facts
+via `Auth.auth_both_valid`, exactly as the lock does. -/
+
+@[simp] theorem res_op (md : Option (Handle T × T)) (n m n' m' : Nat) :
+    res md n m • res (T := T) none n' m' = res md (n + n') (m + m') := by
+  cases md <;> rfl
+
+/-- Splitting a credit off the fragment. -/
+theorem res_split (n m n' m' : Nat) :
+    res (T := T) none (n + n') (m + m') = res (T := T) none n m • res (T := T) none n' m' := rfl
+
+/-- The metadata fragment is duplicable: `Agree` is core-id and the two credits
+are the unit.  Given explicitly -- synthesis times out looking for it through
+`ULift`, `Option`, `Agree` and the pair. -/
+instance arcMeta_coreId (a : Handle T) (v : T) :
+    CMRA.CoreId (res (T := T) (some (a, v)) 0 0) := ⟨.rfl⟩
+
+/-- Hence `arcMetaOwn` is persistent. -/
+instance arcMetaOwn_persistent (γ : GName) (a : Handle T) (v : T) :
+    Persistent (arcMetaOwn (GF := GF) γ a v) := by
+  unfold arcMetaOwn
+  infer_instance
+
+/-- Holding a strong credit forces the authority's strong count to be positive.
+This is what lets `clone`/`drop` know they are not acting on a dead `Arc`, and
+it travels with the *linear* credit rather than with any persistent assertion. -/
+theorem arcAuth_strong_pos (γ : GName) (md : Option (Handle T × T)) (n m : Nat) :
+    iprop(iOwn (F := ArcF T) γ (● res md n m) ∗ arcStrongOwn (T := T) γ)
+      ⊢@{IProp GF} iprop(⌜1 ≤ n⌝) := by
+  iintro ⟨H1, H2⟩
+  simp only [arcStrongOwn] at *
+  ihave Hboth : iprop(iOwn (F := ArcF T) γ _ ∗ iOwn (F := ArcF T) γ _) $$ [H1 H2]
+  · isplitl [H1]
+    · iexact H1
+    · iexact H2
+  ihave %hv := iOwn_cmraValid_op $$ Hboth
+  ipureintro
+  obtain ⟨⟨⟨zmd, zn, zm⟩⟩, hz⟩ := (Auth.auth_both_valid.mp hv).1 0
+  simp only [res, CMRA.op, Prod.op] at hz
+  obtain ⟨-, hn, -⟩ := hz
+  /- `Credit` is discrete, so its `≡{0}≡` is definitionally `Eq`. -/
+  have hn' : n = 1 + zn := hn
+  grind
+
+/-- The metadata fragment pins down which allocation and payload the ghost name
+denotes.  `arcMetaOwn` is persistent, so this is available to every holder. -/
+theorem arcAuth_meta_agree (γ : GName) (a a' : Handle T) (v v' : T) (n m : Nat) :
+    iprop(iOwn (F := ArcF T) γ (● res (some (a', v')) n m) ∗ arcMetaOwn γ a v)
+      ⊢@{IProp GF} iprop(⌜a' = a ∧ v' = v⌝) := by
+  iintro ⟨H1, H2⟩
+  simp only [arcMetaOwn] at *
+  ihave Hboth : iprop(iOwn (F := ArcF T) γ _ ∗ iOwn (F := ArcF T) γ _) $$ [H1 H2]
+  · isplitl [H1]
+    · iexact H1
+    · iexact H2
+  ihave %hv := iOwn_cmraValid_op $$ Hboth
+  ipureintro
+  obtain ⟨hincl, hvalid⟩ := Auth.auth_both_valid.mp hv
+  obtain ⟨⟨⟨zmd, zn, zm⟩⟩, hz⟩ := hincl 0
+  simp only [res, CMRA.op, Prod.op] at hz
+  obtain ⟨hmd, -, -⟩ := hz
+  dsimp only at hmd
+  /- The metadata slot is an `Agree`, so the fragment's entry is included in the
+  authority's, and inclusion between `toAgree`s is equality of the carriers. -/
+  have heq : (LeibnizO.mk (a, v) : ArcMeta T) ≡{0}≡ LeibnizO.mk (a', v') := by
+    cases zmd with
+    | none =>
+      have h : (toAgree (LeibnizO.mk (a', v')) : Agree (ArcMeta T))
+          ≡{0}≡ toAgree (LeibnizO.mk (a, v)) := hmd
+      exact (Agree.toAgree_injN h).symm
+    | some w =>
+      have h : (toAgree (LeibnizO.mk (a', v')) : Agree (ArcMeta T))
+          ≡{0}≡ toAgree (LeibnizO.mk (a, v)) • w := hmd
+      exact Agree.toAgree_includedN.mp ⟨w, h⟩
+  have : (a, v) = (a', v') := LeibnizO.dist_inj heq
+  grind
 
 end Ghost
 
