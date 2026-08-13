@@ -3,7 +3,7 @@ import AeneasIris.Effects.HeapAPI
 import Iris.Instances.Lib.LaterCredits
 import Iris.Algebra.Auth
 import Iris.Algebra.Agree
-import AeneasIris.Tactics
+import AeneasIris.Tactics.Core
 import Iris.BI.Lib.Atomic
 import AeneasIris.AtomicWpi
 
@@ -291,10 +291,89 @@ theorem isWeak_weak_pos (γ : GName) (a : Handle T) (v : T) (n w : Nat) :
   · iexact Hown
   · iexact Hweak
 
+theorem arcAuth_exclusive (γ : GName) (n₁ w₁ n₂ w₂ : Nat) :
+    iprop(arcAuth (T := T) γ n₁ w₁ ∗ arcAuth (T := T) γ n₂ w₂)
+      ⊢@{IProp GF} iprop(False) := by
+  iintro ⟨H1, H2⟩
+  iunfold arcAuth at H1
+  iunfold arcAuth at H2
+  icases H1 with ⟨%a₁, %v₁, -, -, Hown1⟩
+  icases H2 with ⟨%a₂, %v₂, -, -, Hown2⟩
+  ihave Hboth : iprop(iOwn (F := ArcF T) γ _ ∗ iOwn (F := ArcF T) γ _) $$ [Hown1 Hown2]
+  · isplitl [Hown1]
+    · iexact Hown1
+    · iexact Hown2
+  ihave %hv := iOwn_cmraValid_op $$ Hboth
+  iexfalso
+  ipureintro
+  exact Auth.auth_op_valid.mp hv
+
+theorem arcMetaOwn_agree (γ : GName) (a : Handle T) (v v' : T) :
+    iprop(arcMetaOwn γ a v ∗ arcMetaOwn γ a v') ⊢@{IProp GF} iprop(⌜v = v'⌝) := by
+  iintro ⟨H1, H2⟩
+  simp only [arcMetaOwn] at *
+  ihave Hboth : iprop(iOwn (F := ArcF T) γ _ ∗ iOwn (F := ArcF T) γ _) $$ [H1 H2]
+  · isplitl [H1]
+    · iexact H1
+    · iexact H2
+  ihave %hv := iOwn_cmraValid_op $$ Hboth
+  ipureintro
+  have hfrag : ✓{0} _ := (Auth.frag_op_valid.mp hv).validN
+  simp only [res, CMRA.op, Prod.op] at hfrag
+  obtain ⟨hmd, -⟩ := hfrag
+  dsimp only at hmd
+  have h : ✓{0} ((toAgree (LeibnizO.mk (a, v)) : Agree (ArcMeta T))
+      • toAgree (LeibnizO.mk (a, v'))) := hmd
+  have heq := Agree.toAgree_injN (Agree.Raw.op_invN h)
+  have : (a, v) = (a, v') := LeibnizO.dist_inj heq
+  grind
+
+theorem isArc_agree (γ : GName) (a : Handle T) (v v' : T) :
+    iprop(isArc γ a v ∗ isArc γ a v') ⊢@{IProp GF} iprop(⌜v = v'⌝) := by
+  iintro ⟨H1, H2⟩
+  iunfold isArc at H1
+  iunfold isArc at H2
+  icases H1 with ⟨%q₁, Hm1, -, -⟩
+  icases H2 with ⟨%q₂, Hm2, -, -⟩
+  iapply arcMetaOwn_agree γ a v v'
+  isplitl [Hm1]
+  · iexact Hm1
+  · iexact Hm2
+
 end Ghost
 
 instance (a : Handle T) (n w : Nat) : Timeless (PROP := IProp GF) (physical a n w) := by
   cases n <;> cases w <;> (unfold physical; infer_instance)
+
+section Timeless
+variable [ArcG GF T]
+
+instance arcAuth_timeless (γ : GName) (n w : Nat) :
+    Timeless (PROP := IProp GF) (arcAuth (T := T) γ n w) := by
+  unfold arcAuth
+  refine @BI.exists_timeless _ _ _ _ ?_
+  intro a
+  refine @BI.exists_timeless _ _ _ _ ?_
+  intro v
+  cases n
+  · dsimp only
+    infer_instance
+  · dsimp only
+    infer_instance
+
+instance isArc_timeless (γ : GName) (a : Handle T) (v : T) :
+    Timeless (PROP := IProp GF) (isArc γ a v) := by
+  unfold isArc arcMetaOwn arcStrongOwn
+  refine @BI.exists_timeless _ _ _ _ ?_
+  intro q
+  infer_instance
+
+instance isWeak_timeless (γ : GName) (a : Handle T) (v : T) :
+    Timeless (PROP := IProp GF) (isWeak γ a v) := by
+  unfold isWeak arcMetaOwn arcWeakOwn
+  infer_instance
+
+end Timeless
 
 end Assertions
 
@@ -450,6 +529,14 @@ noncomputable instance instArcAPI :
   isArc := isArc
   isWeak := isWeak
 
+  weak_cases w := by cases w with
+    | dangling => exact .inl rfl
+    | live a => exact .inr ⟨a, rfl⟩
+  arcAuth_timeless := by infer_instance
+  isArc_timeless := by infer_instance
+  isWeak_timeless := by infer_instance
+  arcAuth_exclusive := arcAuth_exclusive
+  isArc_agree := isArc_agree
   isArc_strong_pos := isArc_strong_pos
   isWeak_weak_pos := isWeak_weak_pos
 

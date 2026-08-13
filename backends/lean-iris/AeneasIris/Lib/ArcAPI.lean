@@ -1,4 +1,4 @@
-import AeneasIris.Tactics
+import AeneasIris.Tactics.Core
 import AeneasIris.AtomicWpi
 import Iris.BI.Lib.Atomic
 
@@ -54,6 +54,18 @@ class ArcAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
   /-- One weak reference. -/
   isWeak : GName → Handle → T → IProp GF
 
+  /-- `weakNew` and `mkWeak` exhaust the weak handles, so a client holding an
+  abstract one can still pick a spec for it. -/
+  weak_cases w : w = weakNew ∨ ∃ a, w = mkWeak a
+
+  arcAuth_timeless γ n w : Timeless (arcAuth γ n w)
+  isArc_timeless γ a v : Timeless (isArc γ a v)
+  isWeak_timeless γ a v : Timeless (isWeak γ a v)
+
+  arcAuth_exclusive γ n₁ w₁ n₂ w₂ :
+    iprop(arcAuth γ n₁ w₁ ∗ arcAuth γ n₂ w₂) ⊢@{IProp GF} iprop(False)
+  isArc_agree γ a v v' :
+    iprop(isArc γ a v ∗ isArc γ a v') ⊢@{IProp GF} iprop(⌜v = v'⌝)
   isArc_strong_pos γ a v n w :
     iprop(arcAuth γ n w ∗ isArc γ a v) ⊢@{IProp GF} iprop(⌜1 ≤ n⌝)
   isWeak_weak_pos γ a v n w :
@@ -120,6 +132,8 @@ class ArcAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
     ⦃ emp ⦄ (weakStrongCount weakNew) @ Hd ; m ; M ⦃ r, ⌜r = 0⌝ ⦄
   dangling_drop_spec (M : CoPset) :
     ⦃ emp ⦄ (weakDrop weakNew) @ Hd ; m ; M ⦃ r, ⌜r = ()⌝ ⦄
+
+attribute [instance] ArcAPI.arcAuth_timeless ArcAPI.isArc_timeless ArcAPI.isWeak_timeless
 
 end Interface
 
