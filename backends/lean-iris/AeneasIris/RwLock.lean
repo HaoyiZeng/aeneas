@@ -302,6 +302,15 @@ instance (γ : GName) (lk : Handle T) (v : T) :
 theorem readGuardFrac_split (γ : GName) (lk : Handle T) (q₁ q₂ : Qp) (v : T) :
     readGuardFrac (GF := GF) γ lk (q₁ + q₂) v
       ⊣⊢ iprop(readGuardFrac γ lk q₁ v ∗ readGuardFrac γ lk q₂ v) := by
+  /- TODO. Both halves of the permit split, and the two splits are independent:
+
+     - the ghost fragment by `iOwn_op`, since `RwPos`'s `op` is `+` and the
+       pair's is componentwise, so `◯ (q₁ + q₂, s) = ◯ (q₁, s₁) • ◯ (q₂, s₂)`
+       whenever `s₁ + s₂ = s`;
+     - the cell by the `ghost_map_elem_fractional` instance.
+
+     The cell share `s` is existential, so the forward direction is free to
+     halve it (`s/2` each) and the backward direction to add the two back. -/
   sorry
 
 /-- Two locks cannot both be described: `isRwLock` owns the counter cell. -/
