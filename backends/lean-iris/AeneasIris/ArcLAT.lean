@@ -104,7 +104,6 @@ theorem clone_spec (γ : GName) (a : Handle T) (v : T) :
   /- The linearisation point is the `faa`, so the update is opened here. -/
   ihave HAC := aupd_acc _ _ _ ⊤ ∅ ⊤ (by simp) $$ HAU
   imod HAC with ⟨%n, %m, HAuth, Hclose⟩
-  simp only [auUncurry_pair] at *
   /- TODO: the rest needs two algebraic laws that are not proved yet:
        - agreement: `arcAuth γ n m ∗ isArc γ a v ⊢ ⌜n > 0⌝`, and that the
          authority's existentials are exactly this `a` and `v`, so that
