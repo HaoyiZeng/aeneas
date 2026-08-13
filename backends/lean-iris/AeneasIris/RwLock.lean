@@ -325,7 +325,36 @@ theorem readGuardFrac_state (γ : GName) (lk : Handle T) (s : LockState) (q : Qp
 /-- ... and agrees with it on the contents. -/
 theorem readGuardFrac_agree (γ : GName) (lk : Handle T) (s : LockState) (q : Qp) (v v' : T) :
     iprop(isRwLock γ lk s v ∗ readGuardFrac γ lk q v') ⊢@{IProp GF} iprop(⌜v = v'⌝) := by
-  sorry
+  /- Split on the state *before* unfolding: `simp only … at H` cannot reach a
+  proof-mode hypothesis, so the `match` in `rwCore` has to be reduced by the
+  case split itself. -/
+  rcases s with _ | n | _
+  all_goals (iintro ⟨H1, H2⟩;
+             simp only [isRwLock, readGuardFrac, rwCore] at *)
+  · icases H1 with ⟨_, _, Hd1⟩
+    icases H2 with ⟨%sq, _, Hd2⟩
+    ihave Hboth : iprop(pointsToC lk.data _ _ _ ∗ pointsToC lk.data _ _ _) $$ [Hd1 Hd2]
+    · isplitl [Hd1]
+      · iexact Hd1
+      · iexact Hd2
+    ihave %heq := pointsToC_agree lk.data _ _ _ _ _ _ $$ Hboth
+    ipureintro
+    exact Val.eq_of_Is (congrArg Prod.snd heq)
+  · icases H1 with ⟨_, %qo, %qr, _, _, Hd1⟩
+    icases H2 with ⟨%sq, _, Hd2⟩
+    ihave Hboth : iprop(pointsToC lk.data _ _ _ ∗ pointsToC lk.data _ _ _) $$ [Hd1 Hd2]
+    · isplitl [Hd1]
+      · iexact Hd1
+      · iexact Hd2
+    ihave %heq := pointsToC_agree lk.data _ _ _ _ _ _ $$ Hboth
+    ipureintro
+    exact Val.eq_of_Is (congrArg Prod.snd heq)
+  · /- write: the core holds no cell at all, so there is nothing to agree with.
+    The contradiction is algebraic instead -- the write authority is `● none`,
+    and a read permit carries `◯ (some _)`, whose composition is invalid.
+    TODO: `iOwn_cmraValid_op` gives `✓ (● none) • ◯ (some _)`; finish with the
+    `Auth` inclusion lemma (`some _ ≼ none` is impossible). -/
+    sorry
 
 /-- A write guard pins the lock to the write state. -/
 theorem writeGuard_state (γ : GName) (lk : Handle T) (s : LockState) (v v' : T) :
