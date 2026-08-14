@@ -134,9 +134,8 @@ elab "istep" args:istepArgs : tactic => do
         | none => do
             let g ← getMainGoal
             instantiateMVars (← g.getType)
-      /- `consumeMData` first: a goal carrying metadata fails `isAppOfArity`, which
-      is why `saved` is `none` here even for an `Entails'`.  Read the target
-      through `Entails'` or plain `Entails` before classifying it. -/
+      /- Unlike `ofGoalTy?`, strip metadata here: the point is to recognise the
+      goal the reader has just refused. -/
       let ty := tyRaw.consumeMData
       let tgt := (if ty.isAppOfArity ``Iris.ProofMode.Entails' 4
                      || ty.isAppOfArity ``Iris.BI.BIBase.Entails 4 then ty.appArg!
@@ -225,7 +224,11 @@ def wpGoal? (e : Expr) : Option WpGoal := do
     else none
   | _ => none
 
-/-- Strip the proof-mode wrapper, if any, and read the `wpi_mask` underneath. -/
+/-- Strip the proof-mode wrapper, if any, and read the `wpi_mask` underneath.
+
+Deliberately does *not* `consumeMData`.  A stale-making `have` leaves metadata on
+the goal, so refusing to read it here is what turns staleness into an immediate
+error rather than a heartbeat timeout further in. -/
 def ofGoalTy? (ty : Expr) : Option WpGoal :=
   let rhs :=
     if ty.isAppOfArity ``Iris.ProofMode.Entails' 4 then ty.appArg!
@@ -398,7 +401,10 @@ elab_rules : tactic
     let g ← getMainGoal
     let ty ← g.withContext do instantiateMVars (← g.getType)
     let some op ← g.withContext do Read.goalOp? ty
-      | throwError "irule: the goal is not a `wpi_mask`"
+      | if (← g.withContext do isClass? ty).isSome then
+          throwError "irule: the main goal is an unsolved instance, {ty}.\n\nA rule fired, but this instance argument of it could not be synthesised, so it was left behind as a goal. Add it as a hypothesis of the enclosing theorem."
+        else
+          throwError "irule: the goal is not a `wpi_mask` (head {ty.consumeMData.getAppFn})"
     let some c := op.getAppFn.constName?
       | throwError "irule: the operation {op} is not headed by a constant"
     return (ty, c, op)

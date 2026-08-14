@@ -87,14 +87,15 @@ noncomputable def weak_drop (w : WeakHandle T) : ITree E Unit :=
       else
         return ()
 
-/-- No `yield`: this is a CAS retry, not a wait. -/
+/-- The retry is real: the count may change between the load and the
+compare-and-swap, so both are interference points. -/
 noncomputable def try_upgrade (a : Handle T) : ITree E (Option (Handle T)) :=
   ITree.iter (fun _ => do
-    let n : Int ← load a.strong
+    let n : Int ← AtomicHeapAPI.load a.strong
     if n = 0 then
       return .inr none
     else
-      let ok ← cas a.strong n (n + 1)
+      let ok ← AtomicHeapAPI.cas a.strong n (n + 1)
       if ok then return .inr (some a) else return .inl ()) ()
 
 noncomputable def weak_upgrade (w : WeakHandle T) : ITree E (Option (Handle T)) :=
@@ -1375,7 +1376,7 @@ private theorem wpi_aupd_choose {A B V : Type}
       iapply Hret $$ HΨ
   · iapply Hbody $$ Hα
 
-theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd]
+theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd]
     (γ : GName) (w : WeakHandle T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
@@ -1397,6 +1398,8 @@ theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd]
     iunfold ITree.iter
     ibind
     ibind
+    simp only [AtomicHeapAPI.load]
+    iapply Conc.wpi_sync
     iapply (wpi_aupd_choose (m := Mode.part) (hsub := by aupd_mask)) $$ HAU
     iintro %pk HAuth
     obtain ⟨n, k⟩ := pk
@@ -1482,6 +1485,8 @@ theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd]
         · iintro HAU
           simp only [if_neg (show ¬(((n' + 1 : Nat) : Int) = 0) from by grind)]
           ibind
+          simp only [AtomicHeapAPI.cas]
+          iapply Conc.wpi_sync
           iapply (wpi_aupd_choose (m := Mode.part) (hsub := by aupd_mask)) $$ HAU
           iintro %pk2 HAuth2
           obtain ⟨n₂, k₂⟩ := pk2
@@ -1846,7 +1851,7 @@ theorem dangling_drop_spec (w : WeakHandle T) (M : CoPset) :
   iapply wpi_ret
   itrivial
 
-noncomputable instance instArcAPI [stepH GF Mode.part -<ₕ Hd] :
+noncomputable instance instArcAPI [stepH GF Mode.part -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd] :
     ArcAPI GF Hd m T where
   Arc := Handle
   Weak := WeakHandle

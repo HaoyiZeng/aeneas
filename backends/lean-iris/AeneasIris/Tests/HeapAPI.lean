@@ -87,7 +87,7 @@ noncomputable example (l₁ l₂ : Loc) : ITree E PUnit.{1} := do
 error: istep: the goal is a `wpi_mask`, but `irule` could not read it, so no rule fired.
 
 irule said:
-irule: the goal is not a `wpi_mask`
+irule: the goal is not a `wpi_mask` (head @ProofMode.Entails')
 
 Usually this means the reified proof-mode context went stale: a `have`, `rcases`, `cases`, `split` or `rw` between proof-mode steps rebuilds the goal and invalidates it, even though the goal still prints correctly. If there is such a step above, hoist it above the opening `iintro`, or destructure inside the proof-mode tactic instead (e.g. `iintro ⟨a, b⟩`); `simp only` is safe.
 

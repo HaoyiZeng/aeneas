@@ -376,3 +376,14 @@ Each of these cost a debug round. They are all cheap to hit again.
 operation) on one goal, with a frame that no step may disturb. **Any change to
 `Tactics.lean` must leave its failure set unchanged.** It caught, among others, a
 prefilter that silently handed the continuation an empty context.
+22. **`ofGoalTy?` must *not* `consumeMData`.** A stale-making `have` leaves
+    metadata on the goal, so `isAppOfArity ``Entails' 4` fails and `irule` reports
+    "not a `wpi_mask`" immediately. That accident is load-bearing: strip the
+    metadata and `irule` reads the stale goal, then diverges into a `whnf`
+    heartbeat timeout instead. `Tests/HeapAPI.lean`'s `#guard_msgs` pins it.
+23. **"the goal is not a `wpi_mask`" can mean an unsolved instance.** `irule`
+    synthesises instance side-goals and leaves the ones it cannot; such a goal
+    then *is* the main goal, and the staleness advice is misleading. `irule` now
+    says so explicitly. The fix is to add the instance to the enclosing theorem:
+    stepping past a `Conc.sync` needs `[Conc.ConcH GF -<ₕ Hd]`, which `stepH`
+    does not imply.
