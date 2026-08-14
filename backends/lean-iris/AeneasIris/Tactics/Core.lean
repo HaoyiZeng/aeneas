@@ -1,208 +1,642 @@
-import AeneasIris.ISpec
-import AeneasIris.RustHandler
+import AeneasIris.Tactics.ISpec
+import AeneasIris.Rust
+import AeneasIris.Tactics.Triple
 import Iris.BI.WeakestPre
 
-/-!
-# Tactics
-
-Two kinds of step, and they are automated differently.
-
-**A pure Aeneas call** is replayed from the `@[step]` database by `istep`.
-`istop` turns the proof-mode goal into the plain entailment `P ⊢ wp t Q`, which
-*is* an `iSpec`, so `step` applies; the framing lifting threads `P` across the
-call and `and_pure_entails_iff` normalises it back to exactly `P`. Nothing has
-to be restated: all ~167 `⦃⦄` lemmas are reachable this way.
-
-**An operation that touches the heap** cannot go through `step` at all. `step`
-communicates only the program and the postcondition, and a rule that *consumes*
-part of the context has a postcondition depending on which part — there is no
-slot for that, and no frame inference. So `iheap` applies the rule by hand and
-lets the Iris proof mode do the framing, which is what Coq Iris does for
-`wp_load` and friends. The frame is never named: it simply stays in the context.
-
-## The shape of `iheap`
-
-```
-iapply wpi_bind          -- peel the leading operation (skipped in tail position)
-iapply rule              -- goal becomes  ⊢ lat m (pre ∗ (post -∗ |={M}=> …))
-simp only [lat_*]        -- `lat` is a def; `inext` and `isplitl` cannot see through it
-inext                    -- introduce the ▷ *and* strip one off every context hypothesis
-isplitl [h]              -- h pays for `pre`; everything else goes to the continuation
-```
-
-The `inext` is the load-bearing step for recursion: the `▷` it strips off the
-Löb hypothesis is what licenses using it at the recursive call. `lat_intro`
-would discharge the modality too, but it *discards* the `▷`, so it is only
-usable when no Löb induction is in play.
-
-`simp only [lat_identity, lat_later]` requires the modality to be concrete.
-That is not a restriction in practice: a proof is either about partial
-correctness (`.later`) or total correctness (`.identity`), never both, so the
-handler is instantiated before the proof begins.
--/
+/-! # Tactics -/
 
 namespace AeneasIris
 
 open Iris BI Aeneas.Data.Coinductive
 open Aeneas.Std (Result RustEffect)
 
+attribute [istep_rule cont] wpi_stepThen'
+
 unseal Aeneas.Std.Result
 
-/-- `wpi_bind` stated with `Result`'s own bind.
-
-Spelled with `Aeneas.Std.bind` rather than `>>=`: this file `unseal`s `Result`,
-so a `>>=` written here would resolve to `ITree`'s `Monad` instance, while a
-`do` block in a client — where `Result` is opaque — resolves to `Result`'s. The
-two are definitionally equal and syntactically different, and `iapply` unifies
-at reducible transparency, so the mismatch is fatal. Naming the function the
-instance is built from sidesteps the choice. -/
+/-- `wpi_bind` stated with `Result`'s own bind. -/
 theorem wpi_bind_result {hlc : Iris.HasLC} {GF : BundledGFunctors}
     [Iris.InvGS_gen hlc GF] {α β : Type} {H : Handler RustEffect GF}
     (t : Result α) (k : α → Result β) (Φ : Post GF β) (M : CoPset) :
-    wpi_mask GF H t (fun v => wpi_mask GF H (k v) Φ M) M
-      ⊢ wpi_mask GF H (Aeneas.Std.bind t k) Φ M :=
+    wpi_mask GF H m t (fun v => wpi_mask GF H m (k v) Φ M) M
+      ⊢ wpi_mask GF H m (Aeneas.Std.bind t k) Φ M :=
   wpi_bind (H := H) t k Φ M
 
-/-- `wpi_ret` stated with `Result.ok`, for the same reason as
-`wpi_bind_result`: a client writes `Result.ok`, and `iapply` will not unfold it
-to `ITree.ret`. -/
+/-- `wpi_ret` stated with `Result.ok`, for the same reason as -/
 theorem wpi_ret_result {hlc : Iris.HasLC} {GF : BundledGFunctors}
     [Iris.InvGS_gen hlc GF] {α : Type} {H : Handler RustEffect GF}
     (v : α) (Φ : Post GF α) (M : CoPset) :
-    Φ v ⊢ wpi_mask GF H (Result.ok v) Φ M :=
+    Φ v ⊢ wpi_mask GF H m (Result.ok v) Φ M :=
   wpi_ret (H := H) v Φ M
 
+/-- Hand a returned value to the postcondition. -/
+macro "iret" : tactic =>
+  `(tactic|
+    (first | simp only [reduceIte, Bool.false_eq_true, eq_self_iff_true,
+                        if_true, if_false] | skip
+     first
+     | iapply (wpi_ret_result _ _ _)
+     | iapply (AeneasIris.wpi_ret _ _ _)))
 
-/-- The core of `istep`, without the context bookkeeping.
-
-The whole of `step` is reused: the `@[step]` lookup, the lifting through
-`spec_to_iSpec`, the bind detection and the `qimp` elimination are all its own.
-All this adds is the head symbol it dispatches on. Its arguments are forwarded
-verbatim, so `as ⟨…⟩`, `with thm` and the configuration options are inherited
-rather than reimplemented. -/
+/-- The core of `istep`, without the context bookkeeping. -/
 macro "istep_core" args:Aeneas.Step.stepArgs : tactic =>
-  `(tactic| ((first | istop | skip);
-             (first | refine iSpec_intro ?_ | show iSpec _ _ _ _ _);
+  `(tactic| ((first | refine iSpec_intro ?_ | show iSpec _ _ _ _ _);
              step $args))
 
+/-! ## The step tactics, declared ahead of use -/
+
+/-- Apply the rule registered for the leading operation. -/
+syntax "irule" (" with " ident)? (" as " (colGt ppSpace introPat)*)? : tactic
+
+open Lean in
+/-- The first identifier anywhere in a pattern. -/
+partial def firstIdent? (s : Syntax) : Option Syntax :=
+  if s.isIdent then some s else s.getArgs.findSome? firstIdent?
+
+open Lean in
+/-- Does this pattern destructure rather than name? Recognised by its bracket -/
+partial def isTuplePat (s : Syntax) : Bool :=
+  s.getArgs.any (fun a => (a.getAtomVal == "⟨") || isTuplePat a)
+
 open Lean Elab Tactic Meta in
-/-- Consume a leading *pure* Aeneas call, keeping the proof-mode context.
+/-- Translate an intro pattern into an `rcases` one. -/
+partial def icasesToRcases (s : Syntax) : TacticM (TSyntax `rcasesPat) := do
+  if s.isIdent then return ← `(rcasesPat| $(⟨s⟩):ident)
+  for a in s.getArgs do
+    if a.getAtomVal == "⟨" then
+      let elems := s.getArgs[1]!.getSepArgs
+      let subs ← elems.mapM (fun e => icasesToRcases e)
+      return ← `(rcasesPat| ⟨$subs,*⟩)
+  match s.getArgs.filter (fun a => !a.isAtom) with
+  | #[c] => icasesToRcases c
+  | _ => `(rcasesPat| _)
 
-`istep_core` alone loses the hypothesis names. They live in `mdata` attached to
-each conjunct of the reified context (`Iris.ProofMode.mkNameAnnotation`), and
-the `simp` that `step` runs to eliminate `qimp_spec` rebuilds the term and drops
-it — after which `istart` sees an unnamed `∗`-chain and moves the whole thing
-into a wand.
+/-- The `as` clause of `istep`: `step`'s, widened to full `rcases` patterns. -/
+syntax istepArgs := Lean.Parser.Tactic.optConfig (" with " term)?
+                    (" as " " ⟨ " introPat,* " ⟩")? (" by " tacticSeq)?
 
-Recovering them does not need re-introducing anything one by one. `mdata` is
-transparent to definitional equality, so the *old* annotated context can simply
-be put back — provided it is still defeq to the new one, which it is whenever
-the pure fact was eliminated. When it is not, the tactic leaves the goal alone.
-
-The goal is rebuilt as `Entails'`, not `Entails`: `istart` on a plain entailment
-never re-parses the left-hand side, it always starts from an *empty* context and
-moves the whole thing into a wand (`startProofMode`, `hyps := .mkEmp bi`). The
-names only survive while the goal stays in proof-mode form. -/
-elab "istep" args:Aeneas.Step.stepArgs : tactic => do
-  /- The reified context, with its name annotations, before anything runs. -/
+open Lean Elab Tactic Meta in
+/-- Consume a leading *pure* Aeneas call, keeping the proof-mode context. -/
+elab "istep" args:istepArgs : tactic => do
+  let `(istepArgs| $_ $[with $_]? $[as ⟨ $pats,* ⟩]? $[by $_]?) := args
+    | throwError "istep: could not read the arguments"
+  let mut ids : Array Syntax := #[]
+  let mut unpack : Array (Name × TSyntax `introPat) := #[]
+  let asBinderIdent (stx : Syntax) : TacticM Syntax := do
+    let some id := firstIdent? stx
+      | return (← `(Lean.binderIdent| _)).raw
+    return (← `(Lean.binderIdent| $(⟨id⟩):ident)).raw
+  for p in (pats.map (·.getElems)).getD #[] do
+    if isTuplePat p.raw then
+      let nm := Name.mkSimple s!"istepPacked{unpack.size}"
+      ids := ids.push (← asBinderIdent (mkIdent nm))
+      unpack := unpack.push (nm, p)
+    else
+      ids := ids.push (← asBinderIdent p.raw)
+  let raw := args.raw
+  let raw :=
+    if raw[2].getNumArgs == 0 then raw
+    else
+      let grp := raw[2]
+      let sep := grp[2].setArgs <| grp[2].getArgs.mapIdx fun i a =>
+        if i % 2 == 0 then ids[i / 2]! else a
+      raw.setArg 2 (grp.setArg 2 sep)
+  let stepArgs : TSyntax ``Aeneas.Step.stepArgs :=
+    ⟨raw.setKind ``Aeneas.Step.stepArgs⟩
   let saved ← do
     let ty ← instantiateMVars (← (← getMainGoal).getType)
     if ty.isAppOfArity ``Iris.ProofMode.Entails' 4 then pure (some ty) else pure none
-  evalTactic (← `(tactic| istep_core $args))
+  let heapPats : Array (TSyntax `introPat) := (pats.map (·.getElems)).getD #[]
+  let ruleAlt ← if heapPats.isEmpty then `(tactic| irule)
+                else `(tactic| irule as $heapPats*)
+  let mut usedRule := false
+  let mut ruleErr : Option MessageData := none
+  try
+    evalTactic (← `(tactic| $ruleAlt:tactic))
+    usedRule := true
+  catch e => ruleErr := some e.toMessageData
+  if usedRule then return
+  let mut usedRet := false
+  try
+    evalTactic (← `(tactic| iret))
+    usedRet := true
+  catch _ => pure ()
+  if usedRet then return
+  if let some re := ruleErr then
+    /- `irule` reports "is not a `wpi_mask`" both when the goal really is one and
+    the reified context has gone stale, and when the goal is simply another
+    entailment.  Throwing is load-bearing in *both* cases -- falling through lets
+    `istep` consume the goal and leave a `sorryAx` -- so only the diagnosis is
+    chosen here, never whether to complain. -/
+    if ((← re.toString).splitOn "is not a `wpi_mask`").length > 1 then
+      let tyRaw ← match saved with
+        | some ty => pure ty
+        | none => do
+            let g ← getMainGoal
+            instantiateMVars (← g.getType)
+      /- `consumeMData` first: a goal carrying metadata fails `isAppOfArity`, which
+      is why `saved` is `none` here even for an `Entails'`.  Read the target
+      through `Entails'` or plain `Entails` before classifying it. -/
+      let ty := tyRaw.consumeMData
+      let tgt := (if ty.isAppOfArity ``Iris.ProofMode.Entails' 4
+                     || ty.isAppOfArity ``Iris.BI.BIBase.Entails 4 then ty.appArg!
+                  else ty).consumeMData
+      if tgt.isAppOf ``AeneasIris.wpi_mask || tgt.isAppOf ``AeneasIris.iSpec then
+        throwError "istep: the goal is a `wpi_mask`, but `irule` could not read it, so no rule fired.\n\nirule said:\n{re}\n\nUsually this means the reified proof-mode context went stale: a `have`, `rcases`, `cases`, `split` or `rw` between proof-mode steps rebuilds the goal and invalidates it, even though the goal still prints correctly. If there is such a step above, hoist it above the opening `iintro`, or destructure inside the proof-mode tactic instead (e.g. `iintro ⟨a, b⟩`); `simp only` is safe.\n\nIf there is no such step, do not go looking for one — this message reports what `irule` could not do, not why."
+      else
+        throwError "istep: the goal is not a `wpi_mask`, so no step rule applies.\n\n`istep` expects `⦃P⦄ t ⦃v, Q⦄` or an entailment into `wpi_mask`. This goal is an ordinary entailment (a wand, `emp -∗ <wp>`, or similar), which is proof-mode work: use `iintro`, `iexact`, `isplit`, `iapply` and friends.\n\nIf you did expect a `wpi_mask`, `iintro` the wand first -- `ihave … $$ …` leaves exactly this shape behind."
+  try
+    evalTactic (← `(tactic| istep_core $stepArgs))
+  catch e =>
+    try
+      evalTactic (← `(tactic| iret))
+    catch _ =>
+      match ruleErr with
+      | none => throw e
+      | some re =>
+        throwError "istep: no registered rule applied, and the pure fallback failed too.\n\n          irule said:\n{re}\n\n          istep_core said:\n{e.toMessageData}\n\n          If irule says the goal is not a `wpi_mask` while it prints as one, the reified           proof-mode context was invalidated by a `have`, `rcases`, `cases`, `split` or           `rw` earlier in the block. Hoist it above the opening `iintro`, or destructure           inside the proof-mode tactic instead. `simp only` is safe."
+    return
   let some origTy := saved | return
-  /- `@Entails' prop bi e goal`, partially applied: reused to rebuild the same
-  proof-mode goal around a new right-hand side. -/
   let mkPM := origTy.appFn!.appFn!
-  let old := origTy.appFn!.appArg!
   let gs ← getUnsolvedGoals
   let mut gs' := #[]
   for g in gs do
     let ty ← g.withContext do instantiateMVars (← g.getType)
-    /- `Entails P W`: put the annotated `P` back if the two agree. -/
-
-    if ← g.withContext do
-        pure (ty.isAppOfArity ``Iris.BI.BIBase.Entails 4) <&&> isDefEq ty.appFn!.appArg! old then
-      let ty' := (mkPM.app old).app ty.appArg!
+    if ty.isAppOfArity ``Iris.BI.BIBase.Entails 4 then
+      let ty' := (mkPM.app ty.appFn!.appArg!).app ty.appArg!
       gs' := gs'.push (← g.replaceTargetDefEq ty')
     else
       gs' := gs'.push g
   replaceMainGoal gs'.toList
+  for (nm, pat) in unpack do
+    let g ← getMainGoal
+    let some found ← g.withContext do
+        pure <| (← getLCtx).findDecl? fun d =>
+          if !d.isImplementationDetail && d.userName.eraseMacroScopes == nm then
+            some d.userName
+          else none
+      | throwError "istep: the result `{nm}` to unpack is not in the context"
+    let rpat ← icasesToRcases pat.raw
+    evalTactic (← `(tactic| obtain $rpat := $(mkIdent found)))
 
-/-! ## Notation
+/-! ## Notation -/
 
-iris-lean already has the notation, and one of its postcondition brackets is
-already Aeneas': `⦃ ⦄`.
-
-```lean
-class Wp (PROP Expr : Type _) (Val : outParam (Type _)) (A : Type _) where
-  wp : A → CoPset → Expr → (Val → PROP) → PROP
-
-syntax wpExpr := term:max (" @ " term:max (" ; " term:max) <|> …)
-syntax " ⦃ " wpPostcondInner " ⦄ " : wpPostcond
-```
-
-Instantiating `Wp` with the handler in the parameter slot gives
-
-```
-WP t @ H ; M ⦃ v, Q ⦄
-```
-
-which is the Coq development's `WPi t @ H ; M {{ v, Q }}` with Aeneas'
-brackets, and the whole judgment is `P ⊢ WP t @ H ; M ⦃ v, Q ⦄`.
-
-Two things this settles. The leading `WP ` keyword is what makes it parse:
-without it `t @ H` is ambiguous with Lean's explicit-application `@f`, which no
-amount of precedence tuning fixes. And the handler is written rather than taken
-from an ambient instance — the Coq development writes it too, and hiding it
-behind a class field breaks the `-<ₕ` search the rules depend on, since instance
-resolution is keyed on head symbols and stops matching through a projection. -/
-
+/-- The `A` slot carries the handler **and** the mode, because together they are -/
 instance {hlc : Iris.HasLC} {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF] {α : Type} :
-    Iris.Wp (IProp GF) (Result α) α (Handler RustEffect GF) where
-  wp H M t Φ := wpi_mask GF H t Φ M
+    Iris.Wp (IProp GF) (Result α) α (Handler RustEffect GF × Mode) where
+  wp Hm M t Φ := wpi_mask GF Hm.1 Hm.2 t Φ M
 
-/-- Normalise the `lat` wrapper away.
-
-`lat` is a plain `def`, so neither `inext` (which synthesises `FromModal` on the
-goal's head) nor `isplitl` (which synthesises `FromSep`) can see through it.
-Needs the modality to be concrete — which it always is, since a proof is either
-about partial correctness or about total correctness, never both. -/
+/-- Normalise the `lat` wrapper away. -/
 macro "ilat" : tactic =>
   `(tactic| simp only [AeneasIris.Step.lat_identity, AeneasIris.Step.lat_later])
 
-/-- Expose the leading operation of a `do` block.
+/-! ## Reading the goal -/
 
-The head has to be given: splitting `bind a f` into `?t >>= ?k` is a
-higher-order problem, and `iapply` unifies at reducible transparency, where it
-cannot guess `?k`. Everything else is inferred. -/
-macro "ibind " op:term : tactic =>
-  `(tactic| iapply (wpi_bind_result $op _ _ _))
+namespace Read
 
-/-- Apply a handler rule to the leading operation of a `do` block, paying for
-its precondition with `h`.
+open Lean Meta
 
-Leaves one goal — the continuation — with the resource the rule returns still to
-be introduced. Everything the rule did not consume stays in the context
-untouched: the frame is never named, computed or threaded, which is the whole
-reason the heap rules are applied here rather than registered with `step`.
+/-- The four fields of a `wpi_mask` goal that a tactic needs. -/
+structure WpGoal where
+  handler : Expr
+  /-- The `Mode` the weakest precondition is read at. -/
+  mode    : Expr
+  program : Expr
+  post    : Expr
+  mask    : Expr
 
-The `inext` is what makes recursion work: it introduces the `▷` the rule asks
-for *and* strips one off every context hypothesis that has one, including a Löb
-hypothesis. -/
-macro "iheap " op:term " with " rule:pmTerm " using " h:ident : tactic =>
-  `(tactic| (ibind $op;
-             iapply $rule;
-             (first | ilat | skip);
-             (first | inext | skip);
-             isplitl [$h];
-             · iexact $h))
+/-- Read a `wpi_mask` application. -/
+def wpGoal? (e : Expr) : Option WpGoal := do
+  let (f, args) := e.consumeMData.getAppFnArgs
+  let n := args.size
+  match f with
+  | ``AeneasIris.wpi_mask =>
+    if n ≥ 5 then
+      some { handler := args[n - 5]!, mode    := args[n - 4]!
+             program := args[n - 3]!, post    := args[n - 2]!
+             mask    := args[n - 1]! }
+    else none
+  | ``Iris.Wp.wp =>
+    if n ≥ 4 then
+      let hm := args[n - 4]!
+      some { handler := mkProj ``Prod 0 hm, mode := mkProj ``Prod 1 hm
+             mask    := args[n - 3]!
+             program := args[n - 2]!, post    := args[n - 1]! }
+    else none
+  | _ => none
 
-/-- `iheap` in tail position, where there is no bind to peel. -/
-macro "iheap! " rule:pmTerm " using " h:ident : tactic =>
-  `(tactic| (iapply $rule;
-             (first | ilat | skip);
-             (first | inext | skip);
-             isplitl [$h];
-             · iexact $h))
+/-- Strip the proof-mode wrapper, if any, and read the `wpi_mask` underneath. -/
+def ofGoalTy? (ty : Expr) : Option WpGoal :=
+  let rhs :=
+    if ty.isAppOfArity ``Iris.ProofMode.Entails' 4 then ty.appArg!
+    else if ty.isAppOfArity ``Iris.BI.BIBase.Entails 4 then ty.appArg!
+    else ty
+  wpGoal? rhs
+
+/-- Reduce leading pattern-matches, and nothing else, to expose a bind. -/
+partial def exposeBind (headOp? : Expr → Option Expr) (e : Expr) :
+    Nat → MetaM (Option (Expr × Expr))
+  | 0 => return none
+  | fuel + 1 => do
+    if let some h := headOp? e then return some (e, h)
+    let e' ← whnfCore e
+    if let some h := headOp? e' then return some (e', h)
+    if e'.consumeMData.isAppOf ``Aeneas.Std.uncurry then
+      if let some u ← unfoldDefinition? e' then
+        return ← exposeBind headOp? u fuel
+    return none
+
+/-- Put a program back into a `wpi_mask` application. -/
+def setProgram (e : Expr) (prog : Expr) : Option Expr :=
+  e.consumeMData.withApp fun f args =>
+    let n := args.size
+    if n < 4 then none
+    else if f.isConstOf ``AeneasIris.wpi_mask then some (mkAppN f (args.set! (n - 3) prog))
+    else if f.isConstOf ``Iris.Wp.wp then some (mkAppN f (args.set! (n - 2) prog))
+    else none
+
+/-- Put a program back into a goal, through the proof-mode wrapper if there is one. -/
+def setProgramInGoal (ty : Expr) (prog : Expr) : Option Expr :=
+  if ty.isAppOfArity ``Iris.ProofMode.Entails' 4
+      || ty.isAppOfArity ``Iris.BI.BIBase.Entails 4 then
+    (setProgram ty.appArg! prog).map (fun rhs => ty.appFn!.app rhs)
+  else setProgram ty prog
+
+/-- The leading operation of a `do` block, or `none` in tail position. -/
+def headOp? : Expr → Option Expr := IStep.headOp?
+
+/-- Every named hypothesis of a reified proof-mode context. -/
+partial def collectHyps (e : Expr) (acc : Array (Name × Expr) := #[]) :
+    Array (Name × Expr) :=
+  match Iris.ProofMode.parseName? e with
+  | some (name, _, ty) => acc.push (name, ty)
+  | none =>
+    if e.isAppOfArity ``Iris.BI.BIBase.sep 4 then
+      collectHyps e.appArg! (collectHyps e.appFn!.appArg! acc)
+    else acc
+
+end Read
+
+open Lean Elab Tactic Meta in
+/-- Expose the leading operation of a `do` block. -/
+elab "ibind" op:(ppSpace colGt term)? : tactic => do
+  let bindAt : TSyntax `term → TacticM Unit := fun o => do
+    let tac ← `(tactic|
+      first
+      | iapply (wpi_bind_result $o _ _ _)
+      | iapply (wpi_bind $o _ _ _))
+    evalTactic tac
+  match op with
+  | some op => bindAt op
+  | none =>
+    evalTactic (← `(tactic|
+      (first | simp only [Aeneas.Std.bind_assoc_eq, bind_assoc_eq] | skip)))
+    let g ← getMainGoal
+    let ty ← g.withContext do instantiateMVars (← g.getType)
+    let some wp := Read.ofGoalTy? ty
+      | throwError "ibind: goal is not a `wpi_mask`{indentExpr ty}"
+    let some (prog, head) ← g.withContext do Read.exposeBind Read.headOp? wp.program 8
+      | return
+    let g ← if prog == wp.program then pure g else
+      match Read.setProgramInGoal ty prog with
+      | some ty' => g.replaceTargetDefEq ty'
+      | none => pure g
+    replaceMainGoal [g]
+    let headStx ← g.withContext do Term.exprToSyntax head
+    bindAt headStx
+
+/-! ## Applying a registered rule -/
+
+namespace Read
+
+open Lean Meta
+
+/-- The operation the goal begins with, in either position. -/
+def goalOp? (ty : Expr) : MetaM (Option Expr) := do
+  let some wp := ofGoalTy? ty | return none
+  match ← exposeBind headOp? wp.program 8 with
+  | some (_, h) => return some h
+  | none => return some wp.program
+
+/-- Heads that build a *returned value* rather than an operation. -/
+def valueFormer (c : Name) : Bool :=
+  if c == ``ITree.ret then true
+  else if c == ``Pure.pure then true
+  else c == ``Aeneas.Std.Result.ok
+
+/-- δ-unfold an operation until its head is one the registry knows. -/
+partial def knownBody? (e : Expr) : Nat → MetaM (Option Expr)
+  | 0 => return none
+  | fuel + 1 => do
+    let e' ← whnfCore e.consumeMData
+    match headOp? e' with
+    | some hd =>
+      if let some c := hd.consumeMData.getAppFn.constName? then
+        if !(IStep.find? (← getEnv) c).isEmpty then return some e'
+      return none
+    | none =>
+      if let some c := e'.consumeMData.getAppFn.constName? then
+        if !(IStep.find? (← getEnv) c).isEmpty then return some e'
+        if valueFormer c then return none
+      if let some u ← unfoldDefinition? e' then knownBody? u fuel else return none
+
+/-- Reduce the goal's program, without δ. -/
+def normProgramInGoal (g : MVarId) : MetaM (Option MVarId) := do
+  let ty ← g.withContext do instantiateMVars (← g.getType)
+  let some wp := ofGoalTy? ty | return none
+  let prog ← g.withContext do whnfCore wp.program
+  if prog == wp.program then return none
+  let some ty' := setProgramInGoal ty prog | return none
+  return some (← g.replaceTargetDefEq ty')
+
+/-- Split a `∗`-chain into its components. -/
+partial def sepComponents (e : Expr) (acc : Array Expr := #[]) : Array Expr :=
+  let e' := e.consumeMData
+  if e'.isAppOfArity ``Iris.BI.BIBase.sep 4 then
+    sepComponents e'.appArg! (sepComponents e'.appFn!.appArg! acc)
+  else acc.push e'
+
+/-- The head symbols of the resources a rule's precondition asks for. -/
+def ruleResourceHeads (rule : Name) : MetaM (Array Name) := do
+  forallTelescope (← getConstInfo rule).type fun _ body => do
+    let pre ←
+      if body.isAppOfArity ``Iris.BI.BIBase.Entails 4 then pure body.appFn!.appArg!
+      else if body.getAppFn.isConstOf ``AeneasIris.iSpec then
+        let args := body.getAppArgs
+        if args.size < 4 then return #[] else pure args[args.size - 4]!
+      else return #[]
+    return (sepComponents pre).filterMap (·.consumeMData.getAppFn.constName?)
+
+/-- Is this component a pure proposition `⌜φ⌝`? -/
+def isPure (e : Expr) : Bool := e.consumeMData.isAppOf ``Iris.BI.BIBase.pure
+
+/-- The named hypotheses of the current proof-mode context, in order. -/
+def ctxNames (ty : Expr) : Array Name :=
+  let ctx :=
+    if ty.isAppOfArity ``Iris.ProofMode.Entails' 4 then ty.appFn!.appArg! else ty
+  (collectHyps ctx).map (·.1)
+
+end Read
+
+open Lean Elab Tactic Meta in
+/-- Apply the rule registered for the goal's leading operation. -/
+elab_rules : tactic
+  | `(tactic| irule $[with $ruleName?]? $[as $pats*]?) => do
+  let userPats : Array (TSyntax `introPat) := pats.getD #[]
+  let discharge : TacticM Unit := do
+    let gs ← getUnsolvedGoals
+    let mut rest := #[]
+    for gi in gs do
+      let ty ← gi.withContext do instantiateMVars (← gi.getType)
+      if (← gi.withContext do isClass? ty).isSome then
+        try
+          gi.assign (← gi.withContext do synthInstance ty)
+        catch _ => rest := rest.push gi
+      else rest := rest.push gi
+    replaceMainGoal rest.toList
+  let readOp : TacticM (Expr × Name × Expr) := do
+    let g ← getMainGoal
+    let ty ← g.withContext do instantiateMVars (← g.getType)
+    let some op ← g.withContext do Read.goalOp? ty
+      | throwError "irule: the goal is not a `wpi_mask`"
+    let some c := op.getAppFn.constName?
+      | throwError "irule: the operation {op} is not headed by a constant"
+    return (ty, c, op)
+  let applyCont : IStep.Info → TacticM Unit := fun info => do
+    let rule := mkIdent info.rule
+    let g₀ ← getMainGoal
+    let mut alts : Array (TSyntax `tactic) := #[]
+    let ty₀ ← g₀.withContext do instantiateMVars (← g₀.getType)
+    match (Read.ofGoalTy? ty₀).map (·.mode) with
+    | some mExpr =>
+      /- The goal carries the `Mode`, so read it instead of enumerating the
+      `Mode`-typed locals and trying each.  Reading also works when the mode is
+      not a local at all (a section variable or a metavariable), which the
+      enumeration could only fail on, and a genuine failure now reports itself
+      rather than whatever the last guess happened to say. -/
+      let mStx ← g₀.withContext do Term.exprToSyntax mExpr
+      let mWhnf ← g₀.withContext do whnf mExpr
+      let latTac : TSyntax `tactic ←
+        if mWhnf.isConstOf ``AeneasIris.Mode.total then `(tactic| ilat)
+        else if mWhnf.isConstOf ``AeneasIris.Mode.part then `(tactic| (ilat; inext))
+        else `(tactic| iapply AeneasIris.Step.lat_intro)
+      alts := #[← `(tactic| (iapply ($rule (m := $mStx)); $latTac))]
+    | none =>
+      let locals ← g₀.withContext do
+        let mut acc : Array Term := #[]
+        for d in ← getLCtx do
+          if !d.isImplementationDetail then
+            if (← instantiateMVars d.type).isConstOf
+                ``AeneasIris.Mode then
+              acc := acc.push (mkIdent d.userName)
+        pure acc
+      for mt in locals do
+        alts := alts.push (← `(tactic|
+          (iapply ($rule (m := $mt)); iapply AeneasIris.Step.lat_intro)))
+      alts := alts.push (← `(tactic|
+        (iapply ($rule (m := AeneasIris.Mode.part)); ilat; inext)))
+      alts := alts.push (← `(tactic|
+        (iapply ($rule (m := AeneasIris.Mode.total)); ilat)))
+    unless info.mintsLat do alts := #[← `(tactic| iapply ($rule))]
+    evalTactic (← `(tactic| first $[| $alts:tactic]*))
+    if let some g' ← (← getMainGoal).withContext do
+        Read.normProgramInGoal (← getMainGoal) then
+      replaceMainGoal [g']
+  let mut found : Option (Expr × Name × Expr) := none
+  let mut stepped := false
+  let mut stuck : Name := .anonymous
+  for _ in [0:8] do
+    let (_, c₁, _) ← readOp
+    if let some info := (IStep.find? (← getEnv) c₁).find? (·.style == .cont) then
+      applyCont info
+      stepped := true
+    else
+      evalTactic (← `(tactic| ibind))
+      let (ty₂, c₂, op₂) ← readOp
+      if (IStep.find? (← getEnv) c₂).any (·.style == .triple) then
+        found := some (ty₂, c₂, op₂)
+        break
+      stuck := c₂
+      match ← (← getMainGoal).withContext do Read.knownBody? op₂ 8 with
+      | none => break
+      | some exposed =>
+        let g ← getMainGoal
+        match Read.setProgramInGoal ty₂ exposed with
+        | none => break
+        | some ty' => replaceMainGoal [← g.replaceTargetDefEq ty']
+  if found.isNone then
+    if stepped then return
+    throwError "irule: no rule is registered for {stuck}"
+  let (ty0, c, op) := found.get!
+  let infos ← match ruleName? with
+    | some r =>
+      let n ← realizeGlobalConstNoOverloadWithInfo r
+      let (_, nExp, _) ← MetaM.run' (IStep.analyse n .triple)
+      pure #[({ rule := n, nExplicit := nExp, style := .triple, mintsLat := false }
+              : IStep.Info)]
+    | none => pure ((IStep.find? (← getEnv) c).filter (·.style == .triple))
+  if infos.isEmpty then throwError "irule: no rule is registered for {c}"
+  let applyThm := mkIdent ``AeneasIris.iSpec.apply
+  let before := Read.ctxNames ty0
+  let g' ← getMainGoal
+  let opStx ← g'.withContext do
+    let ty ← instantiateMVars (← g'.getType)
+    match ← Read.goalOp? ty with
+    | some o => Term.exprToSyntax o
+    | none   => Term.exprToSyntax op
+  let ctxHyps :=
+    let ctx :=
+      if ty0.isAppOfArity ``Iris.ProofMode.Entails' 4 then ty0.appFn!.appArg! else ty0
+    Read.collectHyps ctx
+  let mkAlt : IStep.Info → TSyntax `specPat → TacticM (TSyntax `tactic) :=
+    fun info pat => do
+      let ruleId := mkIdent info.rule
+      let holes : Array Term := Array.replicate info.nExplicit (← `(_))
+      `(tactic| iapply ($applyThm (t := $opStx) ($ruleId $holes*) _) $$ $pat)
+  let mut ruleAlts : Array (TSyntax `tactic) := #[]
+  for info in infos do
+    let heads ← try g'.withContext do Read.ruleResourceHeads info.rule
+                catch _ => pure #[]
+    for (n, t) in ctxHyps do
+      if let some c := t.consumeMData.getAppFn.constName? then
+        if heads.contains c then
+          let nId := mkIdent n
+          let payer ← `(frameIdent| $nId:ident)
+          let app ← mkAlt info (← `(specPat| [$payer]))
+          ruleAlts := ruleAlts.push (← `(tactic| ($app; iexact $nId)))
+  for info in infos do
+    ruleAlts := ruleAlts.push (← mkAlt info (← `(specPat| [$])))
+  for info in infos do
+    ruleAlts := ruleAlts.push (← mkAlt info (← `(specPat| [//])))
+  /- A `cont` rule may already have consumed an operation, exposing a next one
+  whose resources are not available yet -- they can still be inside an atomic
+  update the caller has to commit first.  Failing here would throw that progress
+  away and report the *second* operation, so keep what was stepped and let the
+  caller carry on. -/
+  if stepped then
+    try evalTactic (← `(tactic| first $[| $ruleAlts:tactic]*))
+    catch _ => return
+  else
+    evalTactic (← `(tactic| first $[| $ruleAlts:tactic]*))
+  discharge
+  do
+    let gs ← getUnsolvedGoals
+    let mut pm : Array MVarId := #[]
+    let mut rest : Array MVarId := #[]
+    for gi in gs do
+      let ty ← gi.withContext do instantiateMVars (← gi.getType)
+      if ty.isAppOfArity ``Iris.ProofMode.Entails' 4 then pm := pm.push gi
+      else rest := rest.push gi
+    unless pm.isEmpty do replaceMainGoal (pm.toList ++ rest.toList)
+  let g₁ ← getMainGoal
+  let ty₁ ← g₁.withContext do instantiateMVars (← g₁.getType)
+  let after := Read.ctxNames ty₁
+  let consumed := before.filter (fun n => !after.contains n)
+  let mut fresh := 0
+  let mkFresh : Nat → Ident := fun i => mkIdent (Name.mkSimple s!"iruleRes{i}")
+  let mkPure (id : Ident) : TacticM (TSyntax `icasesPat) := do
+    let b ← `(Lean.binderIdent| $id:ident)
+    `(icasesPat| %$b:binderIdent)
+  let mkNamed (id : Ident) : TacticM (TSyntax `icasesPat) := do
+    let b ← `(Lean.binderIdent| $id:ident)
+    `(icasesPat| $b:binderIdent)
+  let valPat : TSyntax `icasesPat ←
+    match userPats[0]? >>= (firstIdent? ·.raw) with
+    | some id => mkPure ⟨id⟩
+    | none    => do
+      let b ← `(Lean.binderIdent| _)
+      `(icasesPat| %$b:binderIdent)
+  let valIntro ← `(introPat| $valPat:icasesPat)
+  evalTactic (← `(tactic| iintro $valIntro))
+  let g₂ ← getMainGoal
+  let ty₂ ← g₂.withContext do instantiateMVars (← g₂.getType)
+  let rhs :=
+    if ty₂.isAppOfArity ``Iris.ProofMode.Entails' 4 then ty₂.appArg! else ty₂
+  let comps :=
+    if rhs.consumeMData.isAppOfArity ``Iris.BI.BIBase.wand 4 then
+      Read.sepComponents rhs.consumeMData.appFn!.appArg!
+    else #[]
+  if comps.isEmpty then return
+  let mut pats' : Array (TSyntax `icasesPat) := #[]
+  let mut pureNames : Array Ident := #[]
+  let mut nextUser := 1
+  let mut nextConsumed := 0
+  for comp in comps do
+    if Read.isPure comp then
+      let id := mkIdent (Name.mkSimple s!"iruleEq{fresh}")
+      fresh := fresh + 1
+      pureNames := pureNames.push id
+      pats' := pats'.push (← mkPure id)
+    else if h : nextUser < userPats.size then
+      pats' := pats'.push ⟨userPats[nextUser].raw[0]⟩
+      nextUser := nextUser + 1
+    else if h : nextConsumed < consumed.size then
+      pats' := pats'.push (← mkNamed (mkIdent consumed[nextConsumed]))
+      nextConsumed := nextConsumed + 1
+    else
+      let id := mkFresh fresh
+      fresh := fresh + 1
+      pats' := pats'.push (← mkNamed id)
+  if h : pats'.size = 1 then
+    let onlyPat ← `(introPat| $(pats'[0]):icasesPat)
+    evalTactic (← `(tactic| iintro $onlyPat))
+  else
+    let alts ← pats'.mapM fun q => do
+      let ips : Array (TSyntax `icasesPat) := #[q]
+      `(Iris.ProofMode.icasesPatAlts| $ips|*)
+    evalTactic (← `(tactic| iintro ⟨$alts,*⟩))
+  for id in pureNames do
+    evalTactic (← `(tactic| (first | (simp only [$id:ident]; clear $id) | skip)))
+  evalTactic (← `(tactic| (first | imodintro | skip)))
+
+/-! ## Unfolding inside the proof mode -/
+
+/-- Cast lemma for `iunfold … at`: from `ty = ty'`, the persistent replacement -/
+theorem iunfoldCast {PROP : Type _} [Iris.BI PROP] {e ty ty' : PROP} (h : ty = ty') :
+    e ⊢ iprop(<pers> (ty -∗ ty')) := by
+  subst h
+  exact Iris.BI.persistently_emp_intro.trans
+    (Iris.BI.persistently_mono (Iris.BI.wand_intro Iris.BI.emp_sep.1))
+
+open Lean Elab Tactic Meta Qq Iris.ProofMode in
+/-- `iunfold f` δ-unfolds `f` in the conclusion, leaving the context — and its -/
+elab "iunfold " f:ident : tactic => do
+  let declName ← realizeGlobalConstNoOverloadWithInfo f
+  let g ← getMainGoal
+  let ty ← g.withContext do instantiateMVars (← g.getType)
+  unless ty.isAppOfArity ``Iris.ProofMode.Entails' 4
+      || ty.isAppOfArity ``Iris.BI.BIBase.Entails 4 do
+    throwError "iunfold: goal is not an entailment{indentExpr ty}"
+  let concl := ty.appArg!
+  let r ← g.withContext do Meta.unfold concl declName
+  let ty' := ty.appFn!.app r.expr
+  let g' ← g.withContext do
+    match r.proof? with
+    | some h =>
+        g.replaceTargetEq ty' (← mkCongrArg ty.appFn! h)
+    | none => g.replaceTargetDefEq ty'
+  replaceMainGoal [g']
+
+open Lean Elab Tactic Meta Qq Iris.ProofMode in
+/-- `iunfold f at H` δ-unfolds `f` inside the proof-mode hypothesis `H`. -/
+elab "iunfold " f:ident " at " h:ident : tactic => do
+  let declName ← realizeGlobalConstNoOverloadWithInfo f
+  ProofModeM.runTactic fun mvar g => do
+    let { prop, e, hyps, goal, .. } := g
+    let ivar ← hyps.findWithInfo h
+    let some ⟨_, hyps', pf⟩ ← hyps.replace ivar (fun _ _ ty => do
+        let r ← Meta.unfold ty declName
+        let some ty' ← checkTypeQ r.expr prop
+          | throwError "iunfold: unfolded hypothesis is ill-typed"
+        let heqE ← match r.proof? with
+          | some p => pure p
+          | none   => mkEqRefl ty
+        let some heq ← checkTypeQ heqE q(($ty : $prop) = $ty')
+          | throwError "iunfold: could not build the unfolding equality"
+        let pf0 : Q($e ⊢ iprop(<pers> ($ty -∗ $ty'))) := q(AeneasIris.iunfoldCast $heq)
+        return ⟨ty', pf0⟩)
+      | throwError "iunfold: cannot find hypothesis {h}"
+    let pf' ← addBIGoal hyps' goal
+    mvar.assign q(Iris.BI.BIBase.Entails.trans $pf $pf')
 
 end AeneasIris

@@ -1,25 +1,8 @@
 import Iris.BI.Lib.Atomic
-import AeneasIris.wpi
+import AeneasIris.Wpi
+import AeneasIris.Rules
 
-/-!
-# Logically atomic triples for `wpi`
-
-The triple that goes with `Iris.atomicUpdate`: the client is handed an atomic
-update, and must produce a `wpi`.
-
-The update itself now comes from `Iris.BI.Lib.Atomic`; only the triple is here,
-because it is stated over `wpi` rather than over a `Language`'s `WP`.
-
-One macro rule covers every combination of the three optional groups --
-post-binders, `RET`-binders, `POST` -- because the arity is inside the packed
-type. Compare `Iris/ProgramLogic/Atomic.lean` before the packing, which needed
-one rule per combination, each spelling out its own scaffolding.
-
-`auUncurry` is what makes this work for `f` and `POST` as well as for the
-predicates: its codomain is an unconstrained `Type _`, so the same packing that
-folds `α : A → PROP` folds `f : A → B → P → V` and
-`POST : A → B → P → Option PROP`.
--/
+/-! # Logically atomic triples for `wpi` -/
 
 namespace AeneasIris.AtomicWpi
 
@@ -29,12 +12,7 @@ section
 
 variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF]
 
-/-- `P -∗? Q` is `Q` when there is no `P`.
-
-The postcondition of a triple is optional, and threading `True -∗ Q` through
-every spec that does not use one is noise. Same definition and same purpose as
-`Iris.wandM`; it is repeated here so this file does not depend on the telescoped
-development. -/
+/-- `P -∗? Q` is `Q` when there is no `P`. -/
 def wandM (P : Option (IProp GF)) (Q : IProp GF) : IProp GF :=
   match P with
   | some P => iprop(P -∗ Q)
@@ -43,38 +21,16 @@ def wandM (P : Option (IProp GF)) (Q : IProp GF) : IProp GF :=
 @[simp] theorem wandM_none (Q : IProp GF) : wandM none Q = Q := rfl
 @[simp] theorem wandM_some (P Q : IProp GF) : wandM (some P) Q = iprop(P -∗ Q) := rfl
 
-/-- A logically atomic triple.
-
-`E` is the mask the *implementation* reserves; the client's update runs at
-`⊤ \ E`, so a client cannot open what the implementation is using.
-
-The two postconditions differ in when they are owed. `β` is the new state of the
-shared resource and is handed over *at* the linearisation point, so it must be
-committed atomically. `POST` is the caller's private receipt -- a guard, a
-handle, a borrow -- which nobody else can observe, so forcing it through the
-linearisation point would only make the spec harder to use. `f` is the value the
-tree returns. -/
+/-- A logically atomic triple. -/
 def atomicWpi {Eff : Effect.{u}} {V : Type v} {A B P : Type _}
-    (Hd : Handler Eff GF) (t : ITree Eff V) (E : CoPset)
+    (Hd : Handler Eff GF) (m : Mode) (t : ITree Eff V) (E : CoPset)
     (α : A → IProp GF) (β : A → B → IProp GF)
     (POST : A → B → P → Option (IProp GF)) (f : A → B → P → V) : IProp GF :=
   iprop(∀ Φ : Post GF V,
     atomicUpdate (⊤ \ E) ∅ α β (fun x y => iprop(∀ z, wandM (POST x y z) (Φ (f x y z)))) -∗
-    wpi_mask GF Hd t Φ ⊤)
+    wpi_mask GF Hd m t Φ ⊤)
 
-/-! ## Notation
-
-`⟪ ∀ x.., α ⟫ Hd t @ E ⟪ ∃ y.., β | z.., RET v; POST ⟫`, with any number of
-binders in each of the three groups, and `RET`-binders and `POST` both optional.
-
-**One rule covers every combination.** The reference needs a separate rule per
-shape because each spells out its own telescope scaffolding; here the arity is
-inside the packed type, so the shape is the same in all cases.
-
-The pre-binders are written `∀` though `α` sits under an `∃` in the update
-underneath. This is the usual Iris reading: the implementation must work for
-*every* state the resource might be in, and the update hands it *some* one of
-them. Same binder, read from the two ends. -/
+/-! ## Notation -/
 
 section Notation
 open Lean
@@ -84,11 +40,11 @@ declare_syntax_cat awPost
 syntax "⟪ " ("∀ " ident+ ", ")? term " ⟫" : awPre
 syntax "⟪ " ("∃ " ident+ ", ")? term " | " (ident+ ", ")? "RET " term ("; " term)? " ⟫" : awPost
 
-syntax:max ppRealFill(awPre ppSpace term:arg ppSpace term:arg " @ " term:arg
-  ppSpace awPost) : term
+syntax:max ppRealFill(awPre ppSpace term:arg ppSpace term:arg ppSpace term:arg
+  " @ " term:arg ppSpace awPost) : term
 
 macro_rules
-  | `(⟪ $[∀ $xs* , ]? $α:term ⟫ $Hd:term $t:term @ $E:term
+  | `(⟪ $[∀ $xs* , ]? $α:term ⟫ $Hd:term $m:term $t:term @ $E:term
       ⟪ $[∃ $ys* , ]? $β:term | $[$zs* , ]? RET $v:term $[; $post:term]? ⟫) => do
       let xs : List Ident := (xs.map (·.toList)).getD []
       let ys : List Ident := (ys.map (·.toList)).getD []
@@ -100,7 +56,7 @@ macro_rules
       let mid  (b : Term) : MacroM Term := do buildAuLam xs (← buildAuLam ys b)
       let full (b : Term) : MacroM Term := do
         buildAuLam xs (← buildAuLam ys (← buildAuLam zs b))
-      `(atomicWpi $Hd $t $E
+      `(atomicWpi $Hd $m $t $E
           $(← pre  (← `(iprop($α))))
           $(← mid  (← `(iprop($β))))
           $(← full postTerm)
@@ -113,14 +69,7 @@ end Notation
 section Delab
 open Lean PrettyPrinter Delaborator SubExpr Iris.Delab
 
-/-- Like `Iris.Delab.enterUncurryChain`, but silent about the binder that
-`buildAuLam` emits for an *empty* group.
-
-The triple has three optional groups, so it needs to tell "no binders" from "one
-binder the body ignores"; the update, having one group per side, does not. The
-marker is the `Unit` ascription `buildAuLam` puts on the empty case, and both
-halves of the test are needed -- `f` in a triple is usually just the innermost
-variable and ignores every binder above it. -/
+/-- Like `Iris.Delab.enterUncurryChain`, but silent about the binder that -/
 private partial def enterAuChain (acc : Array BinderEntry)
     (k : Array BinderEntry → DelabM α) : DelabM α := do
   match (← getExpr) with
@@ -138,14 +87,11 @@ private partial def enterAuChain (acc : Array BinderEntry)
 private def delabAuFamily : DelabM (Array Term × Term) :=
   enterAuChain #[] fun entries => delabBinders entries.toList delab
 
-/-- The notation takes identifiers, so anything `delabBinders` turned into a
-pattern cannot be printed this way; give up and let the default delaborator show
-the raw term rather than print something misleading. -/
+/-- The notation takes identifiers, so anything `delabBinders` turned into a -/
 private def toIdents (ts : Array Term) : DelabM (Array Ident) :=
   ts.mapM fun t => if t.raw.isIdent then pure ⟨t.raw⟩ else failure
 
-/-- Peel a packed family whose leaf is an `Option`, returning the leaf only when
-it is `some`. Used for `POST`, which is absent in most specs. -/
+/-- Peel a packed family whose leaf is an `Option`, returning the leaf only when it is `some`. -/
 private def delabAuOptLeaf : DelabM (Option Term) :=
   enterAuChain #[] fun entries => do
     match_expr (← getExpr) with
@@ -154,23 +100,18 @@ private def delabAuOptLeaf : DelabM (Option Term) :=
         return some body
     | _ => return none
 
-/-- `atomicWpi Hd t E α β POST f` → `⟪ ∀ x.., α ⟫ Hd t @ E ⟪ ∃ y.., β | z.., RET v; POST ⟫`.
-
-Nothing in the packed term records where one binder group ends and the next
-begins, so the boundaries are read off the *shorter* families: `α` binds exactly
-the pre-binders, `β` those plus the post-binders, and `f` all three. -/
+/-- `atomicWpi Hd m t E α β POST f` → `⟪ ∀ x.., α ⟫ Hd m t @ E ⟪ ∃ y.., β | z.., RET v; POST ⟫`. -/
 @[scoped delab app.AeneasIris.AtomicWpi.atomicWpi]
 def delabAtomicWpi : Delab := do
-  guard <| (← getExpr).isAppOfArity ``atomicWpi 15
+  guard <| (← getExpr).isAppOfArity ``atomicWpi 16
   let Hd ← withNaryArg 8 delab
-  let t  ← withNaryArg 9 delab
-  let E  ← withNaryArg 10 delab
-  let (preT, aBody) ← withNaryArg 11 delabAuFamily
-  let (midT, bBody) ← withNaryArg 12 delabAuFamily
-  let post          ← withNaryArg 13 delabAuOptLeaf
-  let (allT, vBody) ← withNaryArg 14 delabAuFamily
-  /- `f` must bind at least what `β` does, or these are not the families this
-     notation builds; leave such a term to the default printer. -/
+  let m  ← withNaryArg 9 delab
+  let t  ← withNaryArg 10 delab
+  let E  ← withNaryArg 11 delab
+  let (preT, aBody) ← withNaryArg 12 delabAuFamily
+  let (midT, bBody) ← withNaryArg 13 delabAuFamily
+  let post          ← withNaryArg 14 delabAuOptLeaf
+  let (allT, vBody) ← withNaryArg 15 delabAuFamily
   guard <| preT.size ≤ midT.size && midT.size ≤ allT.size
   let xs ← toIdents preT
   let ys ← toIdents (midT.extract preT.size midT.size)
@@ -186,33 +127,171 @@ def delabAtomicWpi : Delab := do
     | false, true,  some p => `(awPost| ⟪ ∃ $ys*, $bBody | RET $vBody; $p ⟫)
     | false, false, none   => `(awPost| ⟪ ∃ $ys*, $bBody | $zs*, RET $vBody ⟫)
     | false, false, some p => `(awPost| ⟪ ∃ $ys*, $bBody | $zs*, RET $vBody; $p ⟫)
-  `($preStx:awPre $Hd $t @ $E $postStx:awPost)
+  `($preStx:awPre $Hd $m $t @ $E $postStx:awPost)
 
 end Delab
 
-/-! ## Round-trip tests
+/-! ## Opening the update without leaving `wpi_mask` -/
 
-The three optional groups -- post-binders, `RET`-binders, `POST` -- are what the
-reference needs separate macro rules for. Here they are one rule, so these check
-that each combination still prints as what produced it. -/
+/-- Discharge the mask side condition of the `aupd` lemmas. -/
+syntax "aupd_mask" : tactic
+macro_rules
+  | `(tactic| aupd_mask) =>
+    `(tactic| first
+      | assumption
+      | simp
+      | exact fun _ _ => Iris.Std.CoPset.mem_full
+      | intro _ _; simp)
 
-section Tests
-variable {Eff : Effect.{0}} (Hd : Handler Eff GF)
-variable {S V : Type} (inv : S → V → IProp GF) (t : ITree Eff Nat)
+section Aupd
 
-/-- info: ⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ ∃ w, inv s w | r, RET r; inv s v ⟫ : IProp GF -/
-#guard_msgs in
-#check (⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ ∃ w, inv s w | r, RET r; inv s v ⟫)
+open AeneasIris
 
-/-- info: ⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ ∃ w, inv s w | RET 0 ⟫ : IProp GF -/
-#guard_msgs in
-#check (⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ ∃ w, inv s w | RET 0 ⟫)
+variable {Eff : Effect.{1}} {V : Type} {Hd : Handler Eff GF} {m : Mode}
 
-/-- info: ⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ inv s v | RET 0 ⟫ : IProp GF -/
-#guard_msgs in
-#check (⟪ ∀ s v, inv s v ⟫ Hd t @ ⊤ ⟪ inv s v | RET 0 ⟫)
+/-- **At the empty mask, `wpi_mask` is `wpi`.** -/
+theorem wpi_mask_empty (t : ITree Eff V) (Φ : Post GF V) :
+    wpi_mask GF Hd m t Φ ∅ ⊣⊢ wpi GF Hd m t Φ := by
+  simp only [wpi_mask]
+  exact (AeneasIris.wpi_update_emp (H := Hd) t _).trans
+    (AeneasIris.wpi_update_post_emp (H := Hd) t Φ)
 
-end Tests
+/-- **Open the atomic update and commit, in one step.** -/
+theorem wpi_aupd_commit {A B : Type _} (Eo Ei E : CoPset) (t : ITree Eff V)
+    (α : A → IProp GF) (β Ψ : A → B → IProp GF) (Φ : Post GF V)
+    (hsub : Eo ⊆ E) :
+    atomicUpdate Eo Ei α β Ψ ⊢
+      iprop((∀ x, α x -∗ wpi_mask GF Hd m t (fun v => iprop(∃ y, β x y ∗ (Ψ x y -∗ Φ v))) Ei) -∗
+            wpi_mask GF Hd m t Φ E) := by
+  iintro HAU Hbody
+  iapply (AeneasIris.wpi_reduce_mask (H := Hd) t Φ E Ei)
+  imod (Iris.aupd_acc _ _ _ Eo Ei E hsub) $$ HAU with ⟨%x, Hα, Hclose⟩
+  imodintro
+  icases Hclose with ⟨-, Hcommit⟩
+  iapply (AeneasIris.wpi_wand (H := Hd) t
+            (fun v => iprop(∃ y, β x y ∗ (Ψ x y -∗ Φ v)))
+            (fun v => iprop(|={Ei, E}=> Φ v)) Ei) $$ [Hcommit]
+  · iintro %v ⟨%y, Hβ, Hret⟩
+    imod Hcommit $$ Hβ with HΨ
+    imodintro
+    iapply Hret $$ HΨ
+  · iapply Hbody $$ Hα
+
+/-- **Open the atomic update and abort.** -/
+theorem wpi_aupd_abort {A B : Type _} (Eo Ei E : CoPset) (t : ITree Eff V)
+    (α : A → IProp GF) (β Ψ : A → B → IProp GF) (Φ : Post GF V)
+    (hsub : Eo ⊆ E) :
+    atomicUpdate Eo Ei α β Ψ ⊢
+      iprop((∀ x, α x -∗ wpi_mask GF Hd m t
+                    (fun v => iprop(α x ∗ (atomicUpdate Eo Ei α β Ψ -∗ Φ v))) Ei) -∗
+            wpi_mask GF Hd m t Φ E) := by
+  iintro HAU Hbody
+  iapply (AeneasIris.wpi_reduce_mask (H := Hd) t Φ E Ei)
+  imod (Iris.aupd_acc _ _ _ Eo Ei E hsub) $$ HAU with ⟨%x, Hα, Hclose⟩
+  imodintro
+  icases Hclose with ⟨Habort, -⟩
+  iapply (AeneasIris.wpi_wand (H := Hd) t
+            (fun v => iprop(α x ∗ (atomicUpdate Eo Ei α β Ψ -∗ Φ v)))
+            (fun v => iprop(|={Ei, E}=> Φ v)) Ei) $$ [Habort]
+  · iintro %v ⟨Hα', Hret⟩
+    imod Habort $$ Hα' with HAU'
+    imodintro
+    iapply Hret $$ HAU'
+  · iapply Hbody $$ Hα
+
+/-! ### Opening, at any arity -/
+
+syntax "iaupd_commit " specPat " as " rcasesPat " with " introPat : tactic
+syntax "iaupd_abort " specPat " as " rcasesPat " with " introPat : tactic
+
+open Lean in
+/-- Open the atomic update, naming the update's binders.
+
+A single-identifier pattern is introduced *directly*, rather than introduced under
+an internal name and then `obtain`ed: `obtain x := v` on a bare local variable is
+a no-op, so the requested name would be accepted and then silently dropped.  A
+tuple pattern still goes through `obtain`, which destructures the variable in
+place and so substitutes into the hypotheses already in scope. -/
+macro_rules
+  | `(tactic| iaupd_commit $au:specPat as $pat:rcasesPat with $h:introPat) => do
+      if pat.raw.getKind == ``Lean.Parser.Tactic.rcasesPat.one then
+        let id : Ident := ⟨pat.raw[0]⟩
+        let bi ← `(Lean.binderIdent| $id:ident)
+        `(tactic|
+          (iapply (wpi_aupd_commit (hsub := by aupd_mask)) $$ $au
+           iintro %$bi $h))
+      else
+        `(tactic|
+          (iapply (wpi_aupd_commit (hsub := by aupd_mask)) $$ $au
+           iintro %iaupdPacked $h
+           obtain $pat := iaupdPacked))
+  | `(tactic| iaupd_abort $au:specPat as $pat:rcasesPat with $h:introPat) => do
+      if pat.raw.getKind == ``Lean.Parser.Tactic.rcasesPat.one then
+        let id : Ident := ⟨pat.raw[0]⟩
+        let bi ← `(Lean.binderIdent| $id:ident)
+        `(tactic|
+          (iapply (wpi_aupd_abort (hsub := by aupd_mask)) $$ $au
+           iintro %$bi $h))
+      else
+        `(tactic|
+          (iapply (wpi_aupd_abort (hsub := by aupd_mask)) $$ $au
+           iintro %iaupdPacked $h
+           obtain $pat := iaupdPacked))
+
+end Aupd
+
+/-! ## One-shot atomic updates -/
+
+section OneShot
+
+open AeneasIris
+
+variable {Eff : Effect.{1}} {V : Type} {Hd : Handler Eff GF} {m : Mode}
+
+/-- A one-shot atomic update: hands over `α x`, takes back `β x y`, returns `Ψ x y`. -/
+def oneShotUpd {A B : Type _} (Eo Ei : CoPset)
+    (α : A → IProp GF) (β Ψ : A → B → IProp GF) : IProp GF :=
+  iprop(|={Eo, Ei}=> ∃ x, α x ∗ (∀ y, β x y -∗ |={Ei, Eo}=> Ψ x y))
+
+/-- **Open a one-shot update and commit.** `wpi_aupd_commit` for the one-shot -/
+theorem wpi_oneShot_commit {A B : Type _} (t : ITree Eff V)
+    (α : A → IProp GF) (β Ψ : A → B → IProp GF) (Φ : Post GF V) :
+    oneShotUpd ⊤ ∅ α β Ψ ⊢
+      iprop((∀ x, α x -∗ wpi_mask GF Hd m t (fun v => iprop(∃ y, β x y ∗ (Ψ x y -∗ Φ v))) ∅) -∗
+            wpi_mask GF Hd m t Φ ⊤) := by
+  simp only [oneShotUpd]
+  iintro HOS Hbody
+  iapply (AeneasIris.wpi_clear_mask (H := Hd) t Φ ⊤).mp
+  imod HOS with ⟨%x, Hα, Hcommit⟩
+  imodintro
+  iapply (AeneasIris.wpi_wand (H := Hd) t
+            (fun v => iprop(∃ y, β x y ∗ (Ψ x y -∗ Φ v)))
+            (fun v => iprop(|={∅, ⊤}=> Φ v)) ∅) $$ [Hcommit]
+  · iintro %v ⟨%y, Hβ, Hret⟩
+    imod Hcommit $$ Hβ with HΨ
+    imodintro
+    iapply Hret $$ HΨ
+  · iapply Hbody $$ Hα
+
+/-- **A plain spec implies the one-shot spec, and not conversely.** -/
+theorem wpi_oneShot_of_plain (t : ITree Eff V) (A : IProp GF) (Φ : Post GF V) :
+    iprop(A -∗ wpi_mask GF Hd m t Φ ∅) ⊢
+      iprop(oneShotUpd ⊤ ∅ (fun _ : Unit => A) (fun _ _ : Unit => iprop(True))
+              (fun _ _ => iprop(True)) -∗ wpi_mask GF Hd m t Φ ⊤) := by
+  iintro Hplain HOS
+  iapply (wpi_oneShot_commit (Hd := Hd) t _ _ _ Φ) $$ HOS
+  iintro %x HA
+  iapply (AeneasIris.wpi_wand (H := Hd) t Φ
+            (fun v => iprop(∃ _y : Unit, True ∗ (True -∗ Φ v))) ∅) $$ []
+  · iintro %v HΦ
+    iexists ()
+    isplitl []
+    · itrivial
+    · iintro _
+      iexact HΦ
+  · iapply Hplain $$ HA
+
+end OneShot
 
 end
 

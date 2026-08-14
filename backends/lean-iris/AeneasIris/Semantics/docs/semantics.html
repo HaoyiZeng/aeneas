@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AeneasIris — the machine, and how ITrees are interpreted</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<style>
+:root {
+  --bg:#fbfbfa; --fg:#1a1a1a; --mut:#5c5c5c; --line:#e2e0dc;
+  --code-bg:#f5f3ef; --accent:#7a3e00; --warn-bg:#fff6e8; --warn-br:#e0a860;
+  --call-bg:#eef4fb; --call-br:#7aa7d4;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#16171a; --fg:#e6e4e0; --mut:#a09c96; --line:#2e3034;
+    --code-bg:#1e2024; --accent:#e0a860; --warn-bg:#2a2113; --warn-br:#8a6520;
+    --call-bg:#15202c; --call-br:#3c6b9e;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--bg); color:var(--fg);
+  font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+}
+#wrap { display:flex; align-items:flex-start; max-width:1500px; margin:0 auto; }
+nav {
+  position:sticky; top:0; flex:0 0 235px; padding:2.2rem 1rem 2rem 1.4rem;
+  max-height:100vh; overflow-y:auto; font-size:.86rem;
+}
+nav b { display:block; margin-bottom:.9rem; font-size:.78rem; letter-spacing:.09em;
+        text-transform:uppercase; color:var(--mut); }
+nav a { display:block; padding:.28rem 0; color:var(--mut); text-decoration:none;
+        border-left:2px solid transparent; padding-left:.6rem; }
+nav a:hover { color:var(--fg); border-left-color:var(--accent); }
+main { flex:1 1 auto; min-width:0; padding:2.2rem 2.4rem 6rem; }
+h1 { font-size:1.75rem; margin:0 0 .3rem; letter-spacing:-.02em; }
+.sub { color:var(--mut); margin:0 0 2.4rem; font-size:.95rem; }
+h2 { font-size:1.3rem; margin:3rem 0 1rem; padding-bottom:.4rem;
+     border-bottom:1px solid var(--line); letter-spacing:-.01em; }
+h3 { font-size:1.02rem; margin:1.9rem 0 .6rem; }
+p { margin:.75rem 0; }
+.lead { font-size:1.08rem; }
+code { font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+       font-size:.875em; }
+p code, li code, td code, th code {
+  background:var(--code-bg); padding:.1em .35em; border-radius:3px; }
+pre { background:var(--code-bg); border:1px solid var(--line); border-radius:6px;
+      padding:.85rem 1rem; overflow-x:auto; font-size:.82rem; line-height:1.5;
+      margin:.8rem 0; }
+pre.axioms { background:transparent; border-style:dashed; }
+table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.88rem; }
+th,td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--line);
+        vertical-align:top; }
+th { font-size:.76rem; text-transform:uppercase; letter-spacing:.06em;
+     color:var(--mut); font-weight:600; }
+details { margin:.7rem 0; border:1px solid var(--line); border-radius:6px;
+          background:var(--code-bg); }
+summary { cursor:pointer; padding:.55rem .9rem; font-size:.85rem; color:var(--mut);
+          user-select:none; }
+summary:hover { color:var(--fg); }
+.panelbody { padding:0 .9rem .3rem; }
+.panelbody pre { background:var(--bg); }
+.note { font-size:.83rem; color:var(--mut); margin:.5rem 0 .2rem;
+        font-family:ui-monospace,monospace; }
+.callout { background:var(--call-bg); border-left:3px solid var(--call-br);
+           padding:.75rem 1rem; border-radius:0 4px 4px 0; }
+.warn { background:var(--warn-bg); border-left:3px solid var(--warn-br);
+        padding:.75rem 1rem; border-radius:0 4px 4px 0; }
+.statbar { display:flex; flex-wrap:wrap; gap:1.6rem; margin:1.6rem 0;
+           padding:.9rem 1.1rem; border:1px solid var(--line); border-radius:6px; }
+.statbar .k { display:block; font-size:.7rem; text-transform:uppercase;
+              letter-spacing:.08em; color:var(--mut); }
+.statbar .v { font-family:ui-monospace,monospace; font-size:.95rem; }
+.rules { display:flex; flex-wrap:wrap; gap:1rem; margin:1rem 0; }
+.rule { flex:1 1 300px; }
+.rulename { font-size:.72rem; text-transform:uppercase; letter-spacing:.08em;
+            color:var(--accent); margin-bottom:.3rem; font-weight:600; }
+.rulebox { border:1px solid var(--line); border-radius:6px; padding:.8rem 1rem;
+           background:var(--code-bg); font-family:ui-monospace,monospace;
+           font-size:.78rem; }
+.prem { color:var(--mut); }
+.bar { border-top:1px solid var(--fg); margin:.45rem 0; opacity:.55; }
+.concl { }
+.rulenote { font-size:.78rem; color:var(--mut); margin-top:.35rem;
+            padding-left:.2rem; font-style:italic; }
+@media (max-width:1000px) {
+  #wrap { flex-direction:column; }
+  nav { position:static; max-height:none; width:100%; flex-basis:auto;
+        border-bottom:1px solid var(--line); }
+  main { padding:1.5rem 1.2rem 4rem; }
+}
+</style></head>
+<body><div id="wrap">
+<nav><b>Contents</b><a href="#intro">What this is</a><a href="#effects">1 · Effects</a><a href="#heap">2 · Heap model</a><a href="#ops">3 · Operations</a><a href="#handler">4 · Handler</a><a href="#machine">5 · Machine</a><a href="#invariant">6 · Invariant</a><a href="#races">7 · Data races</a><a href="#theorems">8 · Theorems</a><a href="#weak">9 · What to check</a></nav>
+<main>
+<h1>AeneasIris — the machine, and how ITrees are interpreted</h1>
+<p class="sub">Generated 2026-08-14 15:21 UTC from 0c917a09. Every Lean snippet is extracted from
+the sources; none is transcribed.</p>
+<section id="intro"><h2>What this page is</h2>
+<p class="lead">A description of the machine that <code>AeneasIris/Semantics/</code>
+defines, and of the interpretation of the ITrees Aeneas emits, laid out so that
+each definition can be checked against its intent.</p>
+
+<p>Every Lean snippet below is <strong>extracted from the sources when this page is
+generated</strong>, never transcribed. A page whose job is "check the definitions"
+would be worthless if the code it displays could drift from the code that is
+compiled.</p>
+
+<div class="statbar">
+  <div><span class="k">generated</span><span class="v">2026-08-14 15:21 UTC</span></div>
+  <div><span class="k">git</span><span class="v">0c917a09</span></div>
+  <div><span class="k">sorry in Semantics/</span><span class="v">0</span></div>
+  <div><span class="k">axiom in Semantics/</span><span class="v">0</span></div>
+</div>
+
+<h3>The one thing to keep in mind while reading</h3>
+<p>Aeneas is written in OCaml and LLBC's semantics lives in Charon, so
+<em>no Lean theorem can relate <code>wpi</code> to Rust's operational
+semantics</em> — that link is a trust assumption, and always was. What follows
+therefore <strong>defines</strong> the semantics at the ITree level. The ITree is
+not a compiled artifact; it <strong>is</strong> the language. This is the same
+position as the Islaris case study in §7 of <em>Program Logics à la Carte</em>.</p>
+
+<p>So the question this page exists to answer is not "is the compiler correct"
+but the sharper and more checkable one: <strong>does this machine describe the
+behaviour you intend the generated code to have?</strong></p>
+</section><section id="effects"><h2>1 · The effect signature</h2>
+<p>A translated Rust program is an <code>ITree RustEffect α</code>, where</p>
+<pre class="lean"><code>RustEffect = FailE ⊕ₑ ConcE ⊕ₑ StepE ⊕ₑ StateE RustHeap</code></pre>
+<p>Four summands, and every observable action of a program is one of them.</p>
+
+<table><thead><tr><th>summand</th><th>operations</th><th>answer type</th><th>meaning</th></tr></thead><tbody><tr><td>FailE</td><td>fail e</td><td>PEmpty</td><td>a panic, or Aeneas&#x27; own partiality (overflow, out-of-bounds). No continuation: the answer type is empty.</td></tr><tr><td>ConcE</td><td>fork, yield, endthread</td><td>Tags / PUnit / PEmpty</td><td>concurrency, Unix-fork style: the child is the continuation, selected by the answer tag.</td></tr><tr><td>StepE</td><td>step</td><td>PUnit</td><td>one tick of the step counter. This is the only source of well-foundedness at .total.</td></tr><tr><td>StateE RustHeap</td><td>modify f</td><td>RustHeap</td><td>a heap transformer. f : RustHeap → Option RustHeap; none means the operation is undefined here.</td></tr></tbody></table>
+
+<details><summary>FailE.I, ConcE.I, ConcE.Tags — extracted</summary><div class="panelbody"><pre class="lean"><code>inductive FailE.I : Type u where
+  | fail : Error → FailE.I</code></pre><pre class="lean"><code>inductive ConcE.I : Type u where
+  | fork : ConcE.I
+  | yield : ConcE.I
+  | endthread : ConcE.I</code></pre><pre class="lean"><code>inductive ConcE.Tags : Type u where
+  | cur
+  | new</code></pre></div></details>
+
+<h3>Why <code>modify</code> is passed the <em>old</em> heap</h3>
+<p>The answer type of <code>modify f</code> is <code>RustHeap</code>, and the value
+handed to the continuation is the heap <em>before</em> the update. This is not a
+convention that could go either way — it is forced, twice:</p>
+<ul>
+<li><code>cas_body</code> reads the pre-state to decide the <code>Bool</code> it
+returns. Handed the post-state it would always report success.</li>
+<li><code>alloc_body</code> returns <code>fresh σ</code>. Handed the post-state it
+would return a <em>second</em> fresh location, not the one it just allocated.</li>
+</ul>
+</section><section id="heap"><h2>2 · The heap model is RustBelt&#x27;s</h2>
+<p>The heap is not our invention. <code>AccessState</code> is λRust's
+<code>lock_state</code>, and every operation's enabling condition is one row of
+λRust's table. <strong>This is where the notion of a data race comes from</strong>
+— it is a consequence of the heap model, not an extra definition bolted on.</p>
+
+<table><thead><tr><th>λRust (lambda-rust/theories/lang/lang.v)</th><th>here</th></tr></thead><tbody><tr><td><code>RSt n</code></td><td><code>AccessState.reading n</code></td></tr><tr><td><code>WSt</code></td><td><code>AccessState.writing</code></td></tr><tr><td><code>state = gmap loc (lock_state * val)</code></td><td><code>RustHeap = HMap (Cell Val)</code></td></tr><tr><td><code>Read Na1Ord</code></td><td><code>readAcquire</code></td></tr><tr><td><code>Read Na2Ord</code></td><td><code>readRelease</code></td></tr><tr><td><code>Write Na1Ord</code></td><td><code>writeAcquire</code></td></tr><tr><td><code>Write Na2Ord</code></td><td><code>writeRelease</code></td></tr><tr><td><code>Read ScOrd</code></td><td><code>load_at</code></td></tr><tr><td><code>Write ScOrd</code></td><td><code>store_at</code></td></tr><tr><td><code>CAS</code></td><td><code>cas</code></td></tr></tbody></table>
+
+<details open><summary>AccessState, Cell, Val, RustHeap — extracted</summary><div class="panelbody"><pre class="lean"><code>inductive AccessState where
+  | writing
+  | reading (n : Nat)
+deriving DecidableEq</code></pre><pre class="lean"><code>abbrev Cell (V : Type u) : Type u := AccessState × V</code></pre><pre class="lean"><code>def Val : Type (u + 1) := (T : Type u) × T</code></pre><pre class="lean"><code>abbrev RustHeap : Type (u + 1) := HMap (Cell Val.{u})</code></pre></div></details>
+
+<h3>Why a cell stores a <em>type</em> alongside its value</h3>
+<p><code>Val = (T : Type) × T</code>. A heap cell remembers what type it was
+written at, so an access at a different type is <em>stuck</em> rather than
+reinterpreting the bytes. Type confusion is therefore an undefined operation,
+in the same sense as an out-of-bounds access — and both are ruled out by
+<code>Safe</code>.</p>
+
+<h3>λRust's table, and ours, proved equal</h3>
+<p><code>races.v</code> calls its enabling table "a crucial definition; if we
+forget to sync it with head_step, the results proven here are worthless". The
+same risk applies here, so the correspondence is not asserted in a comment — it
+is proved, one <code>↔</code> per row, in
+<code>Semantics/RustBelt.lean</code>.</p>
+
+<pre class="lean"><code>(* lambda-rust/theories/lang/races.v, next_access_head_reducible_state *)
+match a with
+| (ReadAcc, ScOrd | Na1Ord) =&gt; ∃ v n, σ !! l = Some (RSt n, v)
+| (ReadAcc, Na2Ord)         =&gt; ∃ v n, σ !! l = Some (RSt (S n), v)
+| (WriteAcc, ScOrd | Na1Ord)=&gt; ∃ v,   σ !! l = Some (RSt 0, v)
+| (WriteAcc, Na2Ord)        =&gt; ∃ v,   σ !! l = Some (WSt, v)
+| (FreeAcc, _)              =&gt; ∃ v ls, σ !! l = Some (ls, v)
+end</code></pre>
+
+<details><summary>The four rows, as Lean theorems — extracted</summary><div class="panelbody"><p class="note">↔, not →. An operation enabled more often would permit races; enabled less often would make the machine stuck where λRust is not. Both directions carry weight.</p><pre class="lean"><code>theorem readAcquire_enabled (σ : RustHeap.{0}) (l : Loc) :
+    (readAcquireF l σ).isSome ↔ ∃ n v, get? σ l = some (AccessState.reading n, v) := by
+  constructor
+  · intro h
+    rcases hg : get? σ l with _ | ⟨st, v⟩
+    · rw [readAcquireF, hg] at h; exact absurd h (by simp)
+    · cases st with
+      | writing =&gt; rw [readAcquireF, hg] at h; exact absurd h (by simp)
+      | reading n =&gt; exact ⟨n, v, rfl⟩
+  · rintro ⟨n, v, hg⟩; simp only [readAcquireF, hg]; rfl</code></pre><pre class="lean"><code>theorem readRelease_enabled (σ : RustHeap.{0}) (l : Loc) :
+    (readReleaseF l σ).isSome ↔ ∃ n v, get? σ l = some (AccessState.reading (n + 1), v) := by
+  constructor
+  · intro h
+    rcases hg : get? σ l with _ | ⟨st, v⟩
+    · rw [readReleaseF, hg] at h; exact absurd h (by simp)
+    · cases st with
+      | writing =&gt; rw [readReleaseF, hg] at h; exact absurd h (by simp)
+      | reading n =&gt;
+        cases n with
+        | zero =&gt; rw [readReleaseF, hg] at h; exact absurd h (by simp)
+        | succ k =&gt; exact ⟨k, v, rfl⟩
+  · rintro ⟨n, v, hg⟩; simp only [readReleaseF, hg]; rfl</code></pre><pre class="lean"><code>theorem writeAcquire_enabled (σ : RustHeap.{0}) (l : Loc) :
+    (writeAcquireF l σ).isSome ↔ ∃ v, get? σ l = some (AccessState.reading 0, v) := by
+  constructor
+  · intro h
+    rcases hg : get? σ l with _ | ⟨st, v⟩
+    · rw [writeAcquireF, hg] at h; exact absurd h (by simp)
+    · cases st with
+      | writing =&gt; rw [writeAcquireF, hg] at h; exact absurd h (by simp)
+      | reading n =&gt;
+        cases n with
+        | zero =&gt; exact ⟨v, rfl⟩
+        | succ k =&gt; rw [writeAcquireF, hg] at h; exact absurd h (by simp)
+  · rintro ⟨v, hg⟩; simp only [writeAcquireF, hg]; rfl</code></pre><pre class="lean"><code>theorem writeRelease_enabled (σ : RustHeap.{0}) (l : Loc) (w : Val.{0}) :
+    (writeReleaseF l w σ).isSome ↔ ∃ v, get? σ l = some (AccessState.writing, v) := by
+  constructor
+  · intro h
+    rcases hg : get? σ l with _ | ⟨st, v⟩
+    · rw [writeReleaseF, hg] at h; exact absurd h (by simp)
+    · cases st with
+      | writing =&gt; exact ⟨v, rfl⟩
+      | reading n =&gt; rw [writeReleaseF, hg] at h; exact absurd h (by simp)
+  · rintro ⟨v, hg⟩; simp only [writeReleaseF, hg]; rfl</code></pre><pre class="lean"><code>theorem storeAt_enabled (σ : RustHeap.{0}) (l : Loc) (w : Val.{0}) :
+    (storeAtF l w σ).isSome ↔ ∃ v, get? σ l = some (AccessState.reading 0, v) := by
+  constructor
+  · intro h
+    rcases hg : get? σ l with _ | ⟨st, v⟩
+    · rw [storeAtF, hg] at h; exact absurd h (by simp)
+    · cases st with
+      | writing =&gt; rw [storeAtF, hg] at h; exact absurd h (by simp)
+      | reading n =&gt;
+        cases n with
+        | zero =&gt; exact ⟨v, rfl⟩
+        | succ k =&gt; rw [storeAtF, hg] at h; exact absurd h (by simp)
+  · rintro ⟨v, hg⟩; simp only [storeAtF, hg]; rfl</code></pre></div></details>
+
+<h3>One deliberate difference: <code>free</code></h3>
+<p>λRust enables <code>free</code> in <em>any</em> lock state and then rules out
+racing with it by a separate argument. We require <code>reading 0</code>, so
+freeing a location another thread is reading or writing is simply stuck, and is
+already excluded by <code>Safe</code>. The same programs are accepted; ours needs
+no extra argument, at the cost of a <code>free</code> enabled less often.</p>
+</section><section id="ops"><h2>3 · The heap operations</h2>
+<p>Each operation is a single <code>modify</code> event, so it is one machine
+step and therefore atomic. Non-atomic Rust accesses are <em>built</em> from two
+of them with a <code>yield</code> in between — that is what makes them
+interruptible, and it is the only reason interference is observable.</p>
+
+<table><thead><tr><th>operation</th><th>requires</th><th>leaves</th><th>value</th><th>λRust rule</th></tr></thead><tbody><tr><td>readAcquire</td><td>reading n</td><td>reading (n+1)</td><td>unchanged</td><td>Read Na1Ord</td></tr><tr><td>readRelease</td><td>reading (n+1)</td><td>reading n</td><td>unchanged</td><td>Read Na2Ord</td></tr><tr><td>writeAcquire</td><td>reading 0</td><td>writing</td><td>unchanged</td><td>Write Na1Ord</td></tr><tr><td>writeRelease</td><td>writing</td><td>reading 0</td><td>new value</td><td>Write Na2Ord</td></tr><tr><td>load_at</td><td>reading _ (+ type match)</td><td>unchanged</td><td>unchanged</td><td>Read ScOrd</td></tr><tr><td>store_at</td><td>reading 0</td><td>reading 0</td><td>new value</td><td>Write ScOrd</td></tr><tr><td>cas (succeeds)</td><td>reading 0, value = old</td><td>reading 0</td><td>new value</td><td>CasSucS</td></tr><tr><td>cas (fails)</td><td>reading n, value ≠ old</td><td>unchanged</td><td>unchanged</td><td>CasFailS</td></tr><tr><td>cas (racing)</td><td>reading (n+1), value = old</td><td>— stuck —</td><td>—</td><td>CasStuckS</td></tr><tr><td>modify</td><td>reading 0 (+ type match)</td><td>reading 0</td><td>f applied</td><td>read-modify-write</td></tr><tr><td>alloc</td><td>—</td><td>reading 0 at a fresh location</td><td>the new value</td><td>AllocS</td></tr><tr><td>free</td><td>reading 0</td><td>location deleted</td><td>—</td><td>FreeS (stricter)</td></tr></tbody></table>
+
+<p class="callout"><strong>The <code>cas</code> rows are worth reading twice.</strong>
+A <em>failed</em> compare-and-swap is only a read, so it is enabled under
+<code>reading (n+1)</code>. A <em>successful</em> one is a write, so under
+<code>reading (n+1)</code> it is stuck — that is exactly λRust's
+<code>CasStuckS</code>, and it is a genuine race. A table that lumped all of
+<code>cas</code> under <code>reading 0</code> would misdescribe the model.</p>
+
+<p>Because those three rows are the ones most likely to drift from the
+implementation, they are not left as table entries — each has a theorem:</p>
+<details><summary>CasSucS — unlocked, always enabled</summary><div class="panelbody"><pre class="lean"><code>theorem cas_enabled_unlocked (σ : RustHeap.{0}) (l : Loc) (old new v : Val.{0})
+    (h : get? σ l = some (AccessState.reading 0, v)) :
+    (casF l old new σ).isSome := by
+  simp only [casF, h]
+  cases hv : decide (v = old) &lt;;&gt; rfl</code></pre></div></details><details><summary>CasFailS — a failing cas is only a read, so readers do not block it</summary><div class="panelbody"><pre class="lean"><code>theorem cas_enabled_readers_of_ne (σ : RustHeap.{0}) (l : Loc) (old new v : Val.{0})
+    (n : Nat) (h : get? σ l = some (AccessState.reading (n + 1), v)) (hne : v ≠ old) :
+    (casF l old new σ).isSome := by
+  simp only [casF, h, if_neg hne]; rfl</code></pre></div></details><details><summary>CasStuckS — a succeeding cas is a write, so a reader makes it stuck</summary><div class="panelbody"><p class="note">this is the race</p><pre class="lean"><code>theorem cas_stuck_readers_of_eq (σ : RustHeap.{0}) (l : Loc) (old new v : Val.{0})
+    (n : Nat) (h : get? σ l = some (AccessState.reading (n + 1), v)) (heq : v = old) :
+    casF l old new σ = none := by
+  simp only [casF, h, if_pos heq]</code></pre></div></details><details><summary>a cell being written blocks cas outright</summary><div class="panelbody"><pre class="lean"><code>theorem cas_stuck_writing (σ : RustHeap.{0}) (l : Loc) (old new v : Val.{0})
+    (h : get? σ l = some (AccessState.writing, v)) :
+    casF l old new σ = none := by
+  simp only [casF, h]</code></pre></div></details><details><summary>casF_eq — the transformer above IS the one in Heap.cas_body, by rfl</summary><div class="panelbody"><p class="note">the defence against the drift λRust warns about</p><pre class="lean"><code>theorem casF_eq (l : Loc) (old new : Val.{0}) :
+    (AeneasIris.Heap.cas_body (E := Aeneas.Std.RustEffect) l old new :
+        ITree Aeneas.Std.RustEffect Bool)
+      = AeneasIris.Heap.act&#x27; (S := RustHeap.{0}) (casF l old new)
+          (fun σ =&gt; match get? σ l with
+            | some (_, v) =&gt; v = old
+            | none =&gt; false) :=
+  rfl</code></pre></div></details>
+
+<h3>Non-atomic accesses, and where the interleaving point is</h3>
+<pre class="lean"><code>def load_na (l : Loc) : ITree E Val.{u} := do
+  let v ← readAcquire l
+  let _ ← yield
+  let _ ← readRelease l
+  return v</code></pre>
+<pre class="lean"><code>def store_na (l : Loc) (v : Val.{u}) : ITree E PUnit.{u+2} := do
+  let _ ← writeAcquire l
+  let _ ← yield
+  writeRelease l v</code></pre>
+<p>λRust is a small-step language, so its scheduler may interleave between the
+two halves of a non-atomic access. We have no scheduler outside the program, so
+the <code>yield</code> is written into the operation. The effect is the same —
+the middle of a non-atomic access is exactly where another thread may observe it
+— but here it is visible in the ITree instead of hidden in a scheduler.</p>
+
+<h3>The transformers, verbatim</h3>
+<details><summary>readAcquire_body — extracted</summary><div class="panelbody"><pre class="lean"><code>def readAcquire_body (l : Loc) : ITree E Val.{u} :=
+  act&#x27; (S := RustHeap.{u}) (fun σ =&gt;
+    match get? σ l with
+    | some (.reading n, v) =&gt; some (insert σ l (.reading (n + 1), v))
+    | _ =&gt; none) (valAt l)</code></pre></div></details><details><summary>readRelease_body — extracted</summary><div class="panelbody"><pre class="lean"><code>def readRelease_body (l : Loc) : ITree E PUnit.{w+1} :=
+  act&#x27; (S := RustHeap.{u}) (fun σ =&gt;
+    match get? σ l with
+    | some (.reading (n + 1), v) =&gt; some (insert σ l (.reading n, v))
+    | _ =&gt; none) (fun _ =&gt; PUnit.unit)</code></pre></div></details><details><summary>writeAcquire_body — extracted</summary><div class="panelbody"><pre class="lean"><code>def writeAcquire_body (l : Loc) : ITree E PUnit.{w+1} :=
+  act&#x27; (S := RustHeap.{u}) (fun σ =&gt;
+    match get? σ l with
+    | some (.reading 0, v) =&gt; some (insert σ l (.writing, v))
+    | _ =&gt; none) (fun _ =&gt; PUnit.unit)</code></pre></div></details><details><summary>writeRelease_body — extracted</summary><div class="panelbody"><pre class="lean"><code>def writeRelease_body (l : Loc) (v : Val.{u}) : ITree E PUnit.{w+1} :=
+  act&#x27; (S := RustHeap.{u}) (fun σ =&gt;
+    match get? σ l with
+    | some (.writing, _) =&gt; some (insert σ l (.reading 0, v))
+    | _ =&gt; none) (fun _ =&gt; PUnit.unit)</code></pre></div></details><details><summary>load_body — extracted</summary><div class="panelbody"><pre class="lean"><code>noncomputable def load_body (T : Type u) [Nonempty T] (l : Loc) : ITree E T :=
+  act&#x27; (S := RustHeap.{u}) (fun σ =&gt;
+    match get? σ l with
+    | some (.reading _, v) =&gt; if v.1 = T then some σ else none
+    | _ =&gt; none) (fun σ =&gt; Val.unpack T (valAt l σ))</code></pre></div></details><details><summary>store_body — extracted</summary><div class="panelbody"><pre class="lean"><code>def store_body (l : Loc) (v : Val.{u}) : ITree E PUnit.{w+1} :=
+  act&#x27; (S := RustHeap.{u}) (fun σ =&gt;
+    match get? σ l with
+    | some (.reading 0, _) =&gt; some (insert σ l (.reading 0, v))
+    | _ =&gt; none) (fun _ =&gt; PUnit.unit)</code></pre></div></details><details><summary>cas_body — extracted</summary><div class="panelbody"><pre class="lean"><code>noncomputable def cas_body (l : Loc) (old new : Val.{u}) : ITree E Bool :=
+  act&#x27; (S := RustHeap.{u}) (fun σ =&gt;
+    match get? σ l with
+    | some (.reading 0, v) =&gt;
+        some (if v = old then insert σ l (.reading 0, new) else σ)
+    | some (.reading (_ + 1), v) =&gt;
+        if v = old then none else some σ
+    | _ =&gt; none)
+    (fun σ =&gt; match get? σ l with
+      | some (_, v) =&gt; v = old
+      | none =&gt; false)</code></pre></div></details><details><summary>modify_body — extracted</summary><div class="panelbody"><pre class="lean"><code>noncomputable def modify_body (T : Type u) [Nonempty T] (f : T → T) (l : Loc) : ITree E T :=
+  act&#x27; (S := RustHeap.{u}) (fun σ =&gt;
+    match get? σ l with
+    | some (.reading 0, v) =&gt;
+        if v.1 = T then some (insert σ l (.reading 0, Val.pack (f (Val.unpack T v)))) else none
+    | _ =&gt; none) (fun σ =&gt; Val.unpack T (valAt l σ))</code></pre></div></details><details><summary>alloc_body — extracted</summary><div class="panelbody"><pre class="lean"><code>def alloc_body (v : Val.{u}) : ITree E Loc :=
+  act&#x27; (S := RustHeap.{u})
+    (fun σ =&gt; some (insert σ (Std.fresh (M := HMap.{u+1}) (K := Loc) (V := Cell.{u+1} Val.{u}) (m := σ) trivial) (.reading 0, v)))
+    (fun σ =&gt; Std.fresh (M := HMap.{u+1}) (K := Loc) (V := Cell.{u+1} Val.{u}) (m := σ) trivial)</code></pre></div></details><details><summary>free_body — extracted</summary><div class="panelbody"><pre class="lean"><code>def free_body (l : Loc) : ITree E PUnit.{w+1} :=
+  act&#x27; (S := RustHeap.{u}) (fun σ =&gt;
+    match get? σ l with
+    | some (.reading 0, _) =&gt; some (delete σ l)
+    | _ =&gt; none) (fun _ =&gt; PUnit.unit)</code></pre></div></details>
+
+<h3>The anti-drift audit</h3>
+<p>Several of these transformers are written out a second time — in
+<code>Races.lean</code>, <code>RustBelt.lean</code> and <code>Vacuity.lean</code> —
+so that theorems can be stated about them directly. A second copy is exactly the
+hazard λRust's <code>races.v</code> warns about, in a comment it puts above its
+own duplicated definition:</p>
+<blockquote>"This is a crucial definition; if we forget to sync it with
+head_step, the results proven here are worthless."</blockquote>
+<p>A drifted copy does not produce an error. The theorem still compiles and is
+still true — of a function nothing executes. The defence is that every copy is
+pinned to the real operation by a <code>rfl</code> lemma, so a divergence becomes
+a <em>build failure</em> instead of a silently empty theorem. This table is
+regenerated from the sources each time and will show a gap if one appears:</p>
+<table><thead><tr><th>hand-written transformer</th><th>pinned by</th><th>status</th></tr></thead><tbody><tr><td>allocF  (Example.lean)</td><td>alloc_body_eq</td><td>✅ pinned</td></tr><tr><td>casF  (RustBelt.lean)</td><td>casF_eq</td><td>✅ pinned</td></tr><tr><td>freeF  (RustBelt.lean)</td><td>freeF_eq</td><td>✅ pinned</td></tr><tr><td>loadF  (Example.lean)</td><td>load_body_eq</td><td>✅ pinned</td></tr><tr><td>loadF  (Vacuity.lean)</td><td>loadF_eq</td><td>✅ pinned</td></tr><tr><td>readAcquireF  (Races.lean)</td><td>readAcquireF_eq</td><td>✅ pinned</td></tr><tr><td>readReleaseF  (RustBelt.lean)</td><td>readReleaseF_eq</td><td>✅ pinned</td></tr><tr><td>setupF  (Vacuity.lean)</td><td>exempt — not a copy of any operation</td><td>✅ pinned</td></tr><tr><td>storeAtF  (RustBelt.lean)</td><td>storeAtF_eq</td><td>✅ pinned</td></tr><tr><td>storeF  (Example.lean)</td><td>store_body_eq</td><td>✅ pinned</td></tr><tr><td>writeAcquireF  (Races.lean)</td><td>writeAcquireF_eq</td><td>✅ pinned</td></tr><tr><td>writeReleaseF  (RustBelt.lean)</td><td>writeReleaseF_eq</td><td>✅ pinned</td></tr></tbody></table>
+</section><section id="handler"><h2>4 · The handler, and the big lock</h2>
+<pre class="lean"><code>def rustH (m : Mode) : Handler RustEffect GF :=
+  failH GF ⊕ₕ ConcH.{1} GF ⊕ₕ stepH.{1} GF m ⊕ₕ stateH heapInterp.{0}</code></pre>
+<p>The handler says what each effect <em>means</em> in Iris. Three of the four
+clauses are unremarkable; <code>ConcE</code> is where the concurrency model
+lives.</p>
+
+<details open><summary>ConcH.run — extracted</summary><div class="panelbody"><p class="note">🧱 P = |={∅,⊤}=> |={⊤,∅}=> P     💰 P = |={⊤,∅}=> P     🧾 P = |={∅,⊤}=> P</p><pre class="lean"><code>def ConcH.run (i : ConcE.I) (Ψ Ψs : ConcE.O i → IProp GF) : IProp GF :=
+  match i with
+  | .fork =&gt; iprop%
+    Ψ .cur ∗ Ψs .new
+  | .yield =&gt; iprop%
+    🧱 (Ψ .unit)
+  | .endthread =&gt; iprop%
+    🧾 True</code></pre></div></details>
+<details><summary>stateH.run — extracted</summary><div class="panelbody"><pre class="lean"><code>def stateH.run (i : (StateE S).I) (Ψ _Ψs : (StateE S).O i → IProp GF) : IProp GF :=
+  match i with
+  | .modify f =&gt; iprop%
+      ∀ s, SI s ={∅}=∗ ∃ s&#x27;, ⌜f s = some s&#x27;⌝ ∗ SI s&#x27; ∗ Ψ s</code></pre></div></details>
+<details><summary>stepH.run — extracted</summary><div class="panelbody"><pre class="lean"><code>def stepH.run.{u} (m : Mode) (i : StepE.I.{u}) (Ψ _Ψs : StepE.O i → IProp GF) :
+    IProp GF :=
+  match i with
+  | .step =&gt; lat m (Ψ PUnit.unit)</code></pre></div></details>
+
+<h3>Cooperative scheduling is forced, not chosen</h3>
+<p><code>ownE ⊤</code> — the token that says "all invariants are closed" — is
+<strong>linear</strong>. A scheduled thread has spent it; an unscheduled one is an
+obligation waiting to acquire it. Since it cannot be duplicated, <em>at most one
+thread can be inside a yield-free region</em>.</p>
+
+<p>Three consequences, none of them stipulated:</p>
+<ul>
+<li><strong>"Atomic" means "yield-free", not "one step".</strong>
+<code>wpi_open_invariant</code> therefore needs no atomicity side condition.</li>
+<li><strong>Yielding with an invariant open is unprovable.</strong> After
+<code>inv_acc</code> the thread holds <code>ownD {ι}</code>; <code>yield</code>'s
+first half must produce <code>ownE ⊤ ∋ ι</code> from <code>wsat</code>, whose entry
+for <code>ι</code> is then in the wrong branch. So the proof cannot be
+completed — which is what makes the model sound rather than merely
+convenient.</li>
+<li><strong>Rust's atomics really are atomic</strong> (<code>step; body</code>, no
+yield), and a non-atomic access is <code>acquire; yield; release</code>.</li>
+</ul>
+</section><section id="machine"><h2>5 · The machine</h2>
+<p>A configuration is a thread pool, an index saying which thread holds the big
+lock, and a heap.</p>
+<pre class="lean"><code>inductive Thread (α : Type) where
+  /-- Still running. -/
+  | alive (t : Result α)
+  /-- Ended by `endthread`. -/
+  | dead</code></pre>
+<pre class="lean"><code>structure Config (α : Type) where
+  threads : List (Thread α)
+  /-- Index into `threads` of the thread that holds the big lock. -/
+  current : Nat
+  heap : RustHeap.{0}</code></pre>
+<details><summary>Config.focus — extracted</summary><div class="panelbody"><p class="note">'the scheduled thread, if it is alive' — this is the only thread that steps</p><pre class="lean"><code>def Config.focus {α : Type} (c : Config α) : Option (Result α) :=
+  match c.threads[c.current]? with
+  | some (.alive t) =&gt; some t
+  | _ =&gt; none</code></pre></div></details>
+
+<h3>The five rules</h3>
+<div class="rules"><div class="rule"><div class="rulename">tick</div><div class="rulebox"><span class="tex" data-tex="\dfrac{\displaystyle \focus(c) = \vis{\opstep}{k}}{\displaystyle c \stepto c[\focus \mapsto k ()]}">\dfrac{\displaystyle \focus(c) = \vis{\opstep}{k}}{\displaystyle c \stepto c[\focus \mapsto k ()]}</span></div><div class="rulenote">A `step` marker: pure bookkeeping, the heap is untouched. At `.part` this is the node whose handler issues the `▷`, i.e. the entry point for Löb.</div><details><summary>the Lean it was parsed from</summary><div class="panelbody"><pre class="lean"><code>  | tick {c : Config α} {k} :
+      c.focus = some (Result.vis stepEv k) →
+      Step c (c.setFocus (k PUnit.unit))</code></pre></div></details></div><div class="rule"><div class="rulename">heap</div><div class="rulebox"><span class="tex" data-tex="\dfrac{\displaystyle \focus(c) = \vis{\opmod\,f}{k} \quad  f \heap(c) = \sigma&#x27;}{\displaystyle c \stepto c[\focus \mapsto k \heap(c)][\heap \mapsto \sigma&#x27;]}">\dfrac{\displaystyle \focus(c) = \vis{\opmod\,f}{k} \quad  f \heap(c) = \sigma&#x27;}{\displaystyle c \stepto c[\focus \mapsto k \heap(c)][\heap \mapsto \sigma&#x27;]}</span></div><div class="rulenote">The one state primitive. Note the continuation receives the **old** heap: `StateE.O (.modify f) = S`, and `stateH` hands `Ψ s` for the pre-state `s`.</div><details><summary>the Lean it was parsed from</summary><div class="panelbody"><pre class="lean"><code>  | heap {c : Config α} {f k σ&#x27;} :
+      c.focus = some (Result.vis (modifyEv f) k) →
+      f c.heap = some σ&#x27; →
+      Step c { c.setFocus (k c.heap) with heap := σ&#x27; }</code></pre></div></details></div><div class="rule"><div class="rulename">yield</div><div class="rulebox"><span class="tex" data-tex="\dfrac{\displaystyle \focus(c) = \vis{\opyield}{k} \quad  \alive(c[\focus \mapsto k ()], j)}{\displaystyle c \stepto c[\focus \mapsto k ()][\cur \mapsto j]}">\dfrac{\displaystyle \focus(c) = \vis{\opyield}{k} \quad  \alive(c[\focus \mapsto k ()], j)}{\displaystyle c \stepto c[\focus \mapsto k ()][\cur \mapsto j]}</span></div><div class="rulenote">The only scheduling point. Control may pass to any live thread, including the current one.</div><details><summary>the Lean it was parsed from</summary><div class="panelbody"><pre class="lean"><code>  | yield {c : Config α} {k j} :
+      c.focus = some (Result.vis yieldEv k) →
+      (c.setFocus (k PUnit.unit)).Alive j →
+      Step c { c.setFocus (k PUnit.unit) with current := j }</code></pre></div></details></div><div class="rule"><div class="rulename">fork</div><div class="rulebox"><span class="tex" data-tex="\dfrac{\displaystyle \focus(c) = \vis{\opfork}{k}}{\displaystyle c \stepto c[\threads \mapsto (\threads(c)\,\setidx\,\cur(c) (\alivet\,(k \tagcur))) \dplus [\alivet\,(k \tagnew)]]}">\dfrac{\displaystyle \focus(c) = \vis{\opfork}{k}}{\displaystyle c \stepto c[\threads \mapsto (\threads(c)\,\setidx\,\cur(c) (\alivet\,(k \tagcur))) \dplus [\alivet\,(k \tagnew)]]}</span></div><div class="rulenote">Unix-style fork: the *same* continuation is resumed twice, with different tags. The child is appended but not scheduled — it becomes eligible at the next `yield`, which is what makes `wpi_fork` hand it its obligation under `|={⊤,∅}=&gt;`.</div><details><summary>the Lean it was parsed from</summary><div class="panelbody"><pre class="lean"><code>  | fork {c : Config α} {k} :
+      c.focus = some (Result.vis forkEv k) →
+      Step c { threads := (c.threads.set c.current (.alive (k ConcE.Tags.cur)))
+                            ++ [.alive (k ConcE.Tags.new)],
+               current := c.current,
+               heap := c.heap }</code></pre></div></details></div><div class="rule"><div class="rulename">endthread</div><div class="rulebox"><span class="tex" data-tex="\dfrac{\displaystyle \focus(c) = \vis{\opend}{k} \quad  \alive(\killt(c), j)}{\displaystyle c \stepto \killt(c)[\cur \mapsto j]}">\dfrac{\displaystyle \focus(c) = \vis{\opend}{k} \quad  \alive(\killt(c), j)}{\displaystyle c \stepto \killt(c)[\cur \mapsto j]}</span></div><div class="rulenote">End the thread and hand the lock on.</div><details><summary>the Lean it was parsed from</summary><div class="panelbody"><pre class="lean"><code>  | endthread {c : Config α} {k j} :
+      c.focus = some (Result.vis endthreadEv k) →
+      c.kill.Alive j →
+      Step c { c.kill with current := j }</code></pre></div></details></div></div>
+
+<details><summary>Step — the whole inductive, as extracted</summary><div class="panelbody"><pre class="lean"><code>inductive Step {α : Type} : Config α → Config α → Prop where
+  /-- A `step` marker: pure bookkeeping, the heap is untouched. At `.part` this
+  is the node whose handler issues the `▷`, i.e. the entry point for Löb. -/
+  | tick {c : Config α} {k} :
+      c.focus = some (Result.vis stepEv k) →
+      Step c (c.setFocus (k PUnit.unit))
+  /-- The one state primitive. Note the continuation receives the **old** heap:
+  `StateE.O (.modify f) = S`, and `stateH` hands `Ψ s` for the pre-state `s`. -/
+  | heap {c : Config α} {f k σ&#x27;} :
+      c.focus = some (Result.vis (modifyEv f) k) →
+      f c.heap = some σ&#x27; →
+      Step c { c.setFocus (k c.heap) with heap := σ&#x27; }
+  /-- The only scheduling point. Control may pass to any live thread, including
+  the current one. -/
+  | yield {c : Config α} {k j} :
+      c.focus = some (Result.vis yieldEv k) →
+      (c.setFocus (k PUnit.unit)).Alive j →
+      Step c { c.setFocus (k PUnit.unit) with current := j }
+  /-- Unix-style fork: the *same* continuation is resumed twice, with different
+  tags. The child is appended but not scheduled — it becomes eligible at the
+  next `yield`, which is what makes `wpi_fork` hand it its obligation under
+  `|={⊤,∅}=&gt;`. -/
+  | fork {c : Config α} {k} :
+      c.focus = some (Result.vis forkEv k) →
+      Step c { threads := (c.threads.set c.current (.alive (k ConcE.Tags.cur)))
+                            ++ [.alive (k ConcE.Tags.new)],
+               current := c.current,
+               heap := c.heap }
+  /-- End the thread and hand the lock on. -/
+  | endthread {c : Config α} {k j} :
+      c.focus = some (Result.vis endthreadEv k) →
+      c.kill.Alive j →
+      Step c { c.kill with current := j }</code></pre></div></details>
+
+<p>The rules above are <strong>parsed from that inductive</strong>, not typed out:
+premises and conclusion come from splitting each constructor at its top-level
+arrows, and each rule carries the Lean it came from. Only the <em>notation</em> is
+a translation table, which is why the source sits beside every rule.</p>
+
+<p>The same rules are emitted as
+<a href="rules.tex"><code>rules.tex</code></a> — mathpartir, ready to
+<code>\input</code> into a paper. The generator compiles it as a check
+(<code>compiles cleanly</code>), because a macro clash produces LaTeX that looks correct
+and does not build: <code>\kill</code> is already a LaTeX command and
+<code>\providecommand</code> silently declines to redefine it, which is exactly
+what happened the first time.</p>
+
+<h3>Reachability</h3>
+<div class="rules"><div class="rule"><div class="rulename">refl</div><div class="rulebox"><span class="tex" data-tex="\dfrac{\displaystyle \ }{\displaystyle c \stepsto c}">\dfrac{\displaystyle \ }{\displaystyle c \stepsto c}</span></div><details><summary>the Lean it was parsed from</summary><div class="panelbody"><pre class="lean"><code>  | refl (c : Config α) : Reaches c c</code></pre></div></details></div><div class="rule"><div class="rulename">tail</div><div class="rulebox"><span class="tex" data-tex="\dfrac{\displaystyle c_1 \stepto c_2 \quad  c_2 \stepsto c_3}{\displaystyle c_1 \stepsto c_3}">\dfrac{\displaystyle c_1 \stepto c_2 \quad  c_2 \stepsto c_3}{\displaystyle c_1 \stepsto c_3}</span></div><details><summary>the Lean it was parsed from</summary><div class="panelbody"><pre class="lean"><code>  | tail {c₁ c₂ c₃ : Config α} : Step c₁ c₂ → Reaches c₂ c₃ → Reaches c₁ c₃</code></pre></div></details></div></div>
+
+<p class="callout"><strong>Only the scheduled thread steps, and control moves only
+at <code>yield</code> and <code>endthread</code>.</strong> Since <code>j</code> is
+existentially quantified in those two rules, quantifying over all
+<em>reachable</em> configurations quantifies over all <em>schedules</em>. That is
+why the theorems below need no separate "for every scheduler" clause.</p>
+
+<h3>Thread switching, in full</h3>
+<p><strong>Exactly two of the five rules change <code>current</code>.</strong> That
+is the whole scheduling model, and everything else about interference follows
+from it.</p>
+
+<table><thead><tr><th>rule</th><th>changes current?</th><th>to what</th></tr></thead><tbody><tr><td>tick</td><td>no</td><td>the scheduled thread keeps the lock</td></tr><tr><td>heap</td><td>no</td><td>likewise — a heap operation is one uninterruptible step</td></tr><tr><td>fork</td><td>no — current := c.current, explicitly</td><td>the child is appended but not scheduled</td></tr><tr><td>yield</td><td>YES</td><td>any live j, chosen nondeterministically — including the yielding thread itself</td></tr><tr><td>endthread</td><td>YES</td><td>any live j, after the current thread becomes a tombstone</td></tr></tbody></table>
+
+<p>Three consequences worth spelling out, because each is easy to misread:</p>
+<ul>
+<li><strong><code>j</code> is existentially quantified, so the machine is
+nondeterministic.</strong> <code>Reaches</code> explores every choice, which is
+why quantifying over reachable configurations quantifies over <em>all
+schedules</em> and no theorem here needs a "for every scheduler" clause.</li>
+<li><strong><code>yield</code> may choose the current thread itself.</strong> It
+does not <em>force</em> a switch, it <em>permits</em> one. A thread that yields
+in a loop may run forever without any other thread ever being scheduled — the
+machine allows that schedule, and it is the reason
+<a href="#races">§7</a>'s second gap exists.</li>
+<li><strong><code>fork</code> does not switch.</strong> The child is appended and
+is <em>not</em> scheduled; it becomes eligible only at the next
+<code>yield</code>. This is exactly why <code>wpi_fork</code> hands the child its
+obligation under <code>|={⊤,∅}=&gt;</code>: the child must acquire the lock
+before it can run.</li>
+</ul>
+
+<p class="callout"><strong>There is no preemption rule.</strong> Nothing lets the
+machine take the lock away from a running thread. That is a deliberate choice and
+it is load-bearing: see <a href="#races">§7</a>, where it is both the price paid
+for a simpler program logic and the source of the one hypothesis
+<code>pairwiseRaceFree_of_safe</code> cannot discharge.</p>
+
+<h3>A schedule, step by step</h3>
+<p><code>Vacuity.racer</code>: allocate, fork; the parent yields, the child takes
+the write lock and yields back, and the parent's own write is then refused. Every
+line below is one <code>Step</code> in the machine-checked proof
+<code>race_reachable</code>.</p>
+
+<table><thead><tr><th>#</th><th>rule</th><th>current</th><th>heap at location 0</th><th>note</th></tr></thead><tbody><tr><td>0</td><td>— (init)</td><td>0</td><td>absent</td><td>one thread, running racer</td></tr><tr><td>1</td><td>heap (setup)</td><td>0</td><td>reading 0</td><td>allocate, unlocked</td></tr><tr><td>2</td><td>fork</td><td>0</td><td>reading 0</td><td>child appended; parent KEEPS the lock</td></tr><tr><td>3</td><td>yield j=1</td><td>1</td><td>reading 0</td><td>parent hands control to the child</td></tr><tr><td>4</td><td>heap (writeAcquire)</td><td>1</td><td>writing</td><td>child takes the write lock</td></tr><tr><td>5</td><td>yield j=0</td><td>0</td><td>writing</td><td>child hands control back — parent is now poised on a refused write</td></tr></tbody></table>
+
+<p>Two things to notice. At step 2 the fork does <strong>not</strong> hand control
+to the child — the parent keeps the lock and must reach its <code>yield</code>
+first. And at step 5 nothing has gone wrong <em>yet</em>: the configuration is
+faulty because of what the parent is <em>about to</em> do, which is what
+<code>Config.Faulty</code> says.</p>
+
+<h3>The same program with one <code>yield</code> removed</h3>
+<p><code>PairwiseRaces.starver</code> is <code>racer</code> with the parent's
+leading <code>yield</code> deleted. Nothing else differs.</p>
+
+<table><thead><tr><th>#</th><th>rule</th><th>current</th><th>heap at location 0</th><th>note</th></tr></thead><tbody><tr><td>0</td><td>— (init)</td><td>0</td><td>absent</td><td>one thread, running starver</td></tr><tr><td>1</td><td>heap (setup)</td><td>0</td><td>reading 0</td><td>allocate, unlocked</td></tr><tr><td>2</td><td>fork</td><td>0</td><td>reading 0</td><td>cStarve — both threads poised on writeAcquire 0</td></tr><tr><td>3</td><td>heap (writeAcquire)</td><td>0</td><td>writing</td><td>the parent takes the lock; it never yielded</td></tr><tr><td>4</td><td>— (ret)</td><td>0</td><td>writing</td><td>parent returns; no rule applies, the machine stops</td></tr><tr><td>—</td><td></td><td></td><td></td><td>the child is alive and never scheduled</td></tr></tbody></table>
+
+<p>The parent takes the lock and returns. A returned thread takes no step, and
+<code>yield</code> is the only rule that moves the lock, so the machine stops
+here — with the child alive and poised on a conflicting write it will never be
+allowed to attempt.</p>
+
+<p class="warn"><strong>The two definitions disagree at
+<code>cStarve</code>, and both halves are proved.</strong> λRust calls it a race
+(two threads poised on conflicting writes); we do not (the scheduled thread's
+operation succeeds, so nothing is refused). See <code>gap_witness</code> in
+<code>PairwiseRaces.lean</code> — it is not an argument, it is a
+theorem.</p>
+
+<h3>What can go wrong</h3>
+<pre class="lean"><code>def Panics {α : Type} (t : Result α) : Prop :=
+  ∃ (e : Error) (k : RustEffect.O (Aeneas.Std.RustEffect.fail e) → Result α),
+    t = Result.vis (Aeneas.Std.RustEffect.fail e) k</code></pre>
+<pre class="lean"><code>def StuckOn {α : Type} (σ : RustHeap.{0}) (t : Result α) : Prop :=
+  ∃ (f : RustHeap.{0} → Option RustHeap.{0}) (k : RustEffect.O (modifyEv f) → Result α),
+    t = Result.vis (modifyEv f) k ∧ f σ = none</code></pre>
+<pre class="lean"><code>def Config.Faulty {α : Type} (c : Config α) : Prop :=
+  ∃ t, c.focus = some t ∧ (Panics t ∨ StuckOn c.heap t)</code></pre>
+<p><code>StuckOn</code> is one condition covering four failures: out-of-bounds
+(the location is absent), use-after-free (likewise, after <code>free</code>),
+type confusion (<code>Val</code>'s type tag disagrees) and a data race (the access
+state forbids it). They are distinguished in <a href="#races">§7</a>.</p>
+</section><section id="invariant"><h2>6 · The invariant</h2>
+<p><code>SysInv</code> is what the soundness proof maintains across every step: the
+heap interpretation, plus one obligation per live thread.</p>
+<pre class="lean"><code>def SysInv (m : Mode) (Φ : α → IProp GF) (c : Config α) : IProp GF :=
+  iprop(heapInterp c.heap ∗ focusObl m Φ c ∗
+        [∗list] i ↦ th ∈ c.kill.threads, readyObl m Φ i th)
+
+end</code></pre>
+<details open><summary>focusObl, runObl, readyObl — extracted</summary><div class="panelbody"><pre class="lean"><code>def focusObl (m : Mode) (Φ : α → IProp GF) (c : Config α) : IProp GF :=
+  match c.focus with
+  | some t =&gt; runObl m Φ c.current t
+  | none =&gt; iprop(emp)</code></pre><pre class="lean"><code>def runObl (m : Mode) (Φ : α → IProp GF) (i : Nat) (t : Result α) : IProp GF :=
+  wpi GF (Rust.rustH m) m t (fun v =&gt; iprop(|={∅, ⊤}=&gt; threadPost Φ i v))</code></pre><pre class="lean"><code>def readyObl (m : Mode) (Φ : α → IProp GF) (i : Nat) : Thread α → IProp GF
+  | .dead =&gt; iprop(emp)
+  | .alive t =&gt; wpi_mask GF (Rust.rustH m) m t (threadPost Φ i) ⊤</code></pre></div></details>
+
+<p>The split <em>is</em> the big lock:</p>
+<table><thead><tr><th>thread</th><th>obligation</th><th>mask</th><th>reading</th></tr></thead><tbody><tr><td>scheduled</td><td>runObl</td><td>∅</td><td>holds the lock; the ownE ⊤ token has been spent into wsat</td></tr><tr><td>every other live thread</td><td>readyObl = |={⊤,∅}=&gt; runObl</td><td>⊤</td><td>an obligation waiting to acquire the lock — a consumer of the token, not a holder</td></tr></tbody></table>
+<p><code>SysInv</code> never mentions <code>ownE ⊤</code> explicitly. It does not
+need to: the <code>runObl</code>/<code>readyObl</code> split is that token's
+bookkeeping, and <code>readyObl_alive</code> holds by <code>rfl</code> — the two
+are literally the same proposition at different masks.</p>
+</section><section id="races"><h2>7 · Data races</h2>
+<p>Everything so far has been the model. This is the definition that <em>uses</em>
+it.</p>
+<pre class="lean"><code>def SameContents (σ σ&#x27; : RustHeap.{0}) : Prop :=
+  ∀ l : Loc, (get? σ l).map Prod.snd = (get? σ&#x27; l).map Prod.snd</code></pre>
+<pre class="lean"><code>def RacesOn (σ : RustHeap.{0}) (f : RustHeap.{0} → Option RustHeap.{0}) : Prop :=
+  f σ = none ∧ ∃ σ&#x27;, SameContents σ σ&#x27; ∧ (f σ&#x27;).isSome</code></pre>
+<p class="callout"><strong>Read <code>RacesOn</code> as: the operation is undefined
+here, and the only thing that would have to change to make it succeed is an
+access state.</strong> The witness heap has the same <em>domain</em> (an
+<code>Option</code> shape mismatch is already a difference) and the same
+<em>values</em>. So the failure cannot be out-of-bounds and cannot be type
+confusion. The access-state discipline is the only thing left to blame — and
+that discipline is λRust's.</p>
+
+<pre class="lean"><code>def Config.Racing {α : Type} (c : Config α) : Prop :=
+  ∃ (f : RustHeap.{0} → Option RustHeap.{0}) (k : RustEffect.O (modifyEv f) → Result α),
+    c.focus = some (Result.vis (modifyEv f) k) ∧ RacesOn c.heap f</code></pre>
+<pre class="lean"><code>def DataRaceFree {α : Type} (t : Result α) : Prop :=
+  ∀ c, Reaches (init t) c → ¬ c.Racing</code></pre>
+
+<h3>How this differs from λRust's definition — and it does differ</h3>
+<p>λRust defines a race <em>pairwise over the thread pool</em>:</p>
+<pre class="lean"><code>(* lambda-rust/theories/lang/races.v *)
+Definition nonracing_accesses (a1 a2 : access_kind * order) : Prop :=
+  match a1, a2 with
+  | (_, ScOrd), (_, ScOrd) =&gt; True
+  | (ReadAcc, _), (ReadAcc, _) =&gt; True
+  | _, _ =&gt; False
+  end.
+
+Definition nonracing_threadpool (el : list expr) (σ : state) : Prop :=
+  ∀ l a1 a2, next_accesses_threadpool el σ a1 a2 l → nonracing_accesses a1 a2.</code></pre>
+
+<p>Two threads, each <em>about to</em> touch the same location, with an
+incompatible pair of access kinds. Ours instead looks at the <em>scheduled</em>
+thread and asks whether it is stuck for an access-state reason. The two are not
+the same statement, and the honest comparison is:</p>
+
+<table><thead><tr><th></th><th>λRust</th><th>here</th></tr></thead><tbody><tr><td>quantifies over</td><td>pairs of threads</td><td>the scheduled thread</td></tr><tr><td>fires</td><td>before either access happens</td><td>when the second access is actually attempted</td></tr><tr><td>nature</td><td>potential race</td><td>manifested race</td></tr><tr><td>read ∥ read</td><td>not a race</td><td>not a race — reading n → reading (n+1) is always enabled</td></tr><tr><td>atomic ∥ atomic</td><td>not a race</td><td>not a race — store_at leaves reading 0</td></tr><tr><td>everything else</td><td>race</td><td>race, on some schedule</td></tr></tbody></table>
+
+<p>On programs built from this API the two usually coincide, and the reason is
+the <code>yield</code> inside every non-atomic access: if two threads are about to
+perform incompatible accesses, then scheduling one, letting it acquire, and
+yielding to the other reaches a configuration where the second is stuck. Since
+<code>DataRaceFree</code> quantifies over <em>all</em> reachable configurations and
+<code>yield</code> may hand control to <em>any</em> live thread, that schedule is
+among the reachable ones.</p>
+
+<p class="warn"><strong>Two places where the difference is real — stated
+precisely, because the informal version of this claim is too strong.</strong></p>
+<ol>
+<li><strong>At a single configuration.</strong> λRust flags "both threads about to
+write, neither stuck yet"; we do not. We flag it one step later, once one of them
+has acquired. A configuration-local statement is not what
+<code>DataRaceFree</code> says and would have to be proved separately.</li>
+<li><strong>When the racing threads are never scheduled.</strong> The argument
+above needs the <em>currently scheduled</em> thread to reach a <code>yield</code>.
+If it instead diverges, or returns — which freezes the machine, see
+<a href="#weak">§9</a> — then two parked threads with incompatible pending
+accesses are never scheduled, no configuration is ever <code>Racing</code>, and
+<code>DataRaceFree</code> holds while λRust's <code>nonracing_threadpool</code>
+fails. Ours is a property of executions; λRust's is a property of
+configurations, and a latent race is invisible to the first.</li>
+</ol>
+<p>This is a genuine weakening, not a presentational one. It is stated here rather
+than left for a reader to find.</p>
+
+<h3>The same program, seen by both definitions</h3>
+<p>Two threads, each performing <code>*x = 1</code> — a non-atomic write — with
+<code>x</code> initially <code>reading 0</code>. Non-atomic means
+<code>writeAcquire; yield; writeRelease</code>.</p>
+
+<table><thead><tr><th>moment</th><th>λRust</th><th>here</th></tr></thead><tbody><tr><td>neither thread has moved</td><td>RACE — (WriteAcc,Na1Ord) × (WriteAcc,Na1Ord)</td><td>not flagged — nobody is stuck</td></tr><tr><td>A has done writeAcquire (x is now writing), A yields</td><td>RACE — still two pending incompatible accesses</td><td>not flagged — B has not tried yet</td></tr><tr><td>B attempts writeAcquire</td><td>RACE</td><td>RACE — f σ = none, and the same-contents heap at reading 0 succeeds</td></tr></tbody></table>
+
+<p>λRust calls it the moment two hands reach for the same object; we call it when
+the second hand hits the first. What makes ours workable at all is the
+<strong>mandatory <code>yield</code></strong> in the middle of every non-atomic
+access: a real conflict must eventually manifest as stuckness on <em>some</em>
+schedule, and <code>DataRaceFree</code> quantifies over all reachable
+configurations while <code>yield</code> may pass control to any live thread.</p>
+
+<h3>What each definition buys, and what it costs</h3>
+<p>Neither is simply better. The trade is worth stating, because it is easy to
+read the previous paragraphs as "ours happens to be equivalent" — it is not.</p>
+
+<table><thead><tr><th></th><th>λRust</th><th>here</th></tr></thead><tbody><tr><td>catches</td><td>potential races</td><td>manifested races — strictly weaker</td></tr><tr><td>needs a second definition of the semantics</td><td>yes — next_access_head, kept in sync with head_step by hand</td><td>no — RacesOn is stated about the transformer f the machine runs</td></tr><tr><td>can that second definition drift?</td><td>yes, silently; the theorem stays true but says nothing</td><td>n/a — nothing to drift</td></tr><tr><td>where the scheduling points are</td><td>everywhere: small-step, scheduler outside the program</td><td>at yield only: written into the operation</td></tr></tbody></table>
+
+<p class="callout">The cost line is the one worth dwelling on. λRust's
+<code>next_access_head</code> is a <em>second description</em> of what the
+operational semantics already says, and nothing in Coq forces the two to agree —
+hence the comment above its definition, quoted in
+<a href="#ops">§3</a>. <code>RacesOn</code> needs no second description: it is
+phrased in terms of the transformer <code>f</code> that the machine actually
+runs, so there is nothing that can drift. That is not cleverness on our part; it
+falls out of having the state transformer be a first-class value rather than a
+syntactic form.</p>
+
+<h3>The pairwise notion, brought over</h3>
+<p><code>Semantics/PairwiseRaces.lean</code> carries λRust's definition across —
+and in one respect improves on it. λRust needs a <em>second description of its own
+semantics</em> (<code>next_access_head</code>, classifying redexes into access
+kinds) which nothing forces to agree with <code>head_step</code>. The version
+here needs no such thing:</p>
+
+<pre class="lean"><code>def Conflict (σ : RustHeap.{0}) (f g : RustHeap.{0} → Option RustHeap.{0}) : Prop :=
+  (∃ σ&#x27;, f σ = some σ&#x27; ∧ g σ&#x27; = none) ∨ (∃ σ&#x27;, g σ = some σ&#x27; ∧ f σ&#x27; = none)</code></pre>
+
+<p>Two pending operations conflict when <strong>performing one disables the
+other</strong> — stated about the transformers the machine actually runs. No
+second description, so nothing to keep in sync, and λRust's compatibility table
+becomes a set of <em>theorems</em> rather than a definition:</p>
+
+<details><summary>read ∥ read — no conflict</summary><div class="panelbody"><pre class="lean"><code>theorem not_conflict_read_read (σ : RustHeap.{0}) (l : Loc) :
+    ¬ Conflict σ (readAcquireF l) (readAcquireF l) := by
+  rintro (⟨σ&#x27;, hs, hn⟩ | ⟨σ&#x27;, hs, hn⟩) &lt;;&gt;
+    exact absurd (read_read_compatible σ σ&#x27; l hs) (by rw [hn]; simp)</code></pre></div></details><details><summary>atomic ∥ atomic — no conflict</summary><div class="panelbody"><pre class="lean"><code>theorem not_conflict_atomic_atomic (σ : RustHeap.{0}) (l : Loc) (v w : Val.{0}) :
+    ¬ Conflict σ (storeAtF l v) (storeAtF l w) := by
+  rintro (⟨σ&#x27;, hs, hn⟩ | ⟨σ&#x27;, hs, hn⟩)
+  · exact absurd (atomic_atomic_compatible σ σ&#x27; l v w hs) (by rw [hn]; simp)
+  · exact absurd (atomic_atomic_compatible σ σ&#x27; l w v hs) (by rw [hn]; simp)</code></pre></div></details><details><summary>write ∥ read — conflict</summary><div class="panelbody"><pre class="lean"><code>theorem conflict_write_read (σ : RustHeap.{0}) (l : Loc) (v : Val.{0})
+    (h : get? σ l = some (AccessState.reading 0, v)) :
+    Conflict σ (writeAcquireF l) (readAcquireF l) := by
+  obtain ⟨σ&#x27;, hs⟩ : ∃ σ&#x27;, writeAcquireF l σ = some σ&#x27; := by
+    rcases hw : writeAcquireF l σ with _ | σ&#x27;
+    · exact absurd ((writeAcquire_enabled σ l).mpr ⟨v, h⟩) (by rw [hw]; simp)
+    · exact ⟨σ&#x27;, rfl⟩
+  exact .inl ⟨σ&#x27;, hs, Option.not_isSome_iff_eq_none.mp (write_read_incompatible σ σ&#x27; l hs)⟩</code></pre></div></details><details><summary>write ∥ write — conflict</summary><div class="panelbody"><pre class="lean"><code>theorem conflict_write_write (σ : RustHeap.{0}) (l : Loc) (v : Val.{0})
+    (h : get? σ l = some (AccessState.reading 0, v)) :
+    Conflict σ (writeAcquireF l) (writeAcquireF l) := by
+  obtain ⟨σ&#x27;, hs⟩ : ∃ σ&#x27;, writeAcquireF l σ = some σ&#x27; := by
+    rcases hw : writeAcquireF l σ with _ | σ&#x27;
+    · exact absurd ((writeAcquire_enabled σ l).mpr ⟨v, h⟩) (by rw [hw]; simp)
+    · exact ⟨σ&#x27;, rfl⟩
+  exact .inl ⟨σ&#x27;, hs, Option.not_isSome_iff_eq_none.mp (write_write_incompatible σ σ&#x27; l hs)⟩</code></pre></div></details><details><summary>read ∥ write — conflict</summary><div class="panelbody"><pre class="lean"><code>theorem conflict_read_write (σ : RustHeap.{0}) (l : Loc) (n : Nat) (v : Val.{0})
+    (h : get? σ l = some (AccessState.reading n, v)) :
+    Conflict σ (readAcquireF l) (writeAcquireF l) := by
+  obtain ⟨σ&#x27;, hs⟩ : ∃ σ&#x27;, readAcquireF l σ = some σ&#x27; := by
+    rcases hr : readAcquireF l σ with _ | σ&#x27;
+    · exact absurd ((readAcquire_enabled σ l).mpr ⟨n, v, h⟩) (by rw [hr]; simp)
+    · exact ⟨σ&#x27;, rfl⟩
+  exact .inl ⟨σ&#x27;, hs, Option.not_isSome_iff_eq_none.mp (read_write_incompatible σ σ&#x27; l hs)⟩</code></pre></div></details>
+
+<p>The pairwise statement itself is then exactly λRust's:</p>
+<pre class="lean"><code>def Config.RacingPair {α : Type} (c : Config α) : Prop :=
+  ∃ i j f g, i ≠ j ∧ PendingOp c i f ∧ PendingOp c j g ∧ Conflict c.heap f g</code></pre><pre class="lean"><code>def PairwiseRaceFree {α : Type} (t : Result α) : Prop :=
+  ∀ c, Reaches (init t) c → ¬ c.RacingPair</code></pre>
+
+<h3>…and the one hypothesis that cannot be discharged here</h3>
+<p><code>Safe</code> constrains the <strong>scheduled</strong> thread. Turning
+"threads <em>i</em> and <em>j</em> are poised on conflicting operations" into a
+contradiction means <em>running</em> <em>i</em> and then <em>scheduling</em>
+<em>j</em> — and control moves only at <code>yield</code>. So the implication
+holds, but only under a premise this machine cannot supply, and that premise is
+given a name rather than hidden:</p>
+
+<pre class="lean"><code>def SchedulableAfter {α : Type} (t : Result α) (c : Config α) (i j : Nat) : Prop :=
+  ∀ f g σ&#x27;, PendingOp c i f → PendingOp c j g → f c.heap = some σ&#x27; →
+    ∃ c&#x27;, Reaches (init t) c&#x27; ∧ c&#x27;.heap = σ&#x27; ∧
+      ∃ k, c&#x27;.focus = some (Result.vis (modifyEv g) k)</code></pre>
+<pre class="lean"><code>theorem pairwiseRaceFree_of_safe {α : Type} {t : Result α} (hS : Safe t)
+    (hsched : ∀ c, Reaches (init t) c → ∀ i j, i ≠ j → SchedulableAfter t c i j) :
+    PairwiseRaceFree t := by
+  rintro c hc ⟨i, j, f, g, hij, hf, hg, hconf⟩
+  rcases hconf with h | h
+  · exact not_conflict_left_of_schedulable hS hf hg (hsched c hc i j hij) h
+  · exact not_conflict_left_of_schedulable hS hg hf (hsched c hc j i (Ne.symm hij)) h</code></pre>
+
+<p class="warn"><strong>Both routes to discharging it fail, for the same
+reason.</strong> <em>Operationally</em>, reaching a configuration where <em>j</em>
+is scheduled needs a <code>Step.yield</code>, hence the current lock holder
+sitting on a <code>yield</code> — which it need not ever do. <em>In Iris</em>,
+one might read the premise off <code>SysInv</code>, but a non-scheduled thread's
+obligation is <code>readyObl = |={⊤,∅}=&gt; runObl</code> and using it spends
+<code>ownE ⊤</code>, which the scheduled thread has already spent. <code>ownE</code>
+is not duplicable, so at most one thread's obligation can be opened — the big
+lock doing its job.</p>
+
+<p>A preemptive machine discharges <code>SchedulableAfter</code> for free. Adding
+preemption here would break the big lock: preempting mid-computation means parking
+a thread at mask <code>⊤</code>, which requires it to hand back <code>ownE ⊤</code>
+from inside a yield-free region. <strong>The cooperative machine and the
+atomicity-free <code>wpi_open_invariant</code> are the same decision seen from two
+sides</strong> (<a href="#handler">§4</a>), and this hypothesis is its price.</p>
+
+<h3>A third gap, and the one most likely to bite</h3>
+<p class="warn"><strong><code>RacesOn</code> can only see a race between
+operations that <em>respect</em> the access-state protocol.</strong>
+<code>Heap.act'</code> takes an <em>arbitrary</em> transformer
+<code>f : RustHeap → Option RustHeap</code>. A hand-written model that writes
+<code>fun σ =&gt; some (insert σ l (reading 0, v))</code> — updating a cell without
+ever consulting or setting its access state — <strong>never gets stuck</strong>,
+so <code>RacesOn</code> never fires, so two such threads race in complete silence
+while <code>DataRaceFree</code> holds.</p>
+
+<p>λRust has no such hole: <code>Read</code> and <code>Write</code> are syntactic
+forms and are the only way to touch the heap. Here the raw transformer is the
+escape hatch, and it is not hypothetical — it is exactly what
+<code>FunsExternal.lean</code> is for.</p>
+
+<p>The practical consequence, stated plainly: <strong>race freedom is a claim
+about code that goes through <code>HeapAPI</code></strong> (which is all
+Aeneas-generated code), <strong>and it is only as good as the hand-written models
+that sit beside it.</strong> A model that bypasses acquire/release does not make
+the theorem false — it makes it not apply. Reviewing new
+<code>FunsExternal</code> entries for protocol compliance is therefore part of
+the trust boundary, not an optional tidiness check.</p>
+
+<h3>Then why does λRust not use the weaker, stuck-based definition?</h3>
+<p>It is the obvious question, and the answer is not "they did not think of it".
+Compare the two proofs of the same-shaped theorem:</p>
+
+<pre class="lean"><code>-- here: Safe → DataRaceFree
+theorem dataRaceFree_of_safe (h : Safe t) : DataRaceFree t :=
+  fun c hr hrace =&gt; h c hr hrace.faulty
+
+-- λRust: safety → nonracing_threadpool
+Theorem safe_nonracing el σ : ... (* the better part of a hundred lines *)</code></pre>
+
+<p class="callout"><strong>One line against ninety. That asymmetry is the whole
+answer: the content is in the definition, not in the proof.</strong> Because
+<code>Racing</code> is a <em>refinement of stuckness</em>, and <code>Safe</code>
+already says "never stuck", the implication is almost a tautology — it reads "if
+you never get stuck, you never get stuck in this particular way". λRust's
+<code>nonracing_threadpool</code> never mentions stuckness, so the gap between it
+and safety is real and has to be bridged by an argument.</p>
+
+<p>Four consequences, in increasing order of depth.</p>
+
+<ol>
+<li><strong>Their statement is recognisable without reading their semantics.</strong>
+"No two threads are concurrently poised on conflicting accesses, at least one a
+write, at least one non-atomic" is, near enough, the definition of a data race in
+the C11 memory model and in the Rust book. Proving <em>that</em> connects the
+type system to a notion the reader already accepts. "No thread ever gets stuck
+for an access-state reason" is a statement about <em>the model</em>, and a
+sceptical reader has to be convinced the model is right first.</li>
+
+<li><strong>Ours leans on a coding convention.</strong> Every non-atomic access
+here is <code>acquire; yield; release</code>, and that <code>yield</code> is what
+makes a real conflict eventually manifest as stuckness. An ITree that does
+<code>writeAcquire</code> without the yield, or that calls raw
+<code>modify</code>, can race in ways <code>RacesOn</code> never observes. λRust
+assumes nothing about how programs are written.</li>
+
+<li><strong>Race freedom is wanted as a per-configuration fact.</strong> A data
+race is undefined behaviour <em>at the moment the two accesses are
+concurrent</em>, not at the moment one of them is refused. λRust's statement has
+that shape; a stuck-based one cannot, because it needs the access to be
+attempted before it can say anything.</li>
+
+<li><strong>And the deepest one: their machine can schedule any thread at any
+time; ours cannot.</strong> "Thread <em>j</em> is poised to race" is immediately
+actionable in a small-step language with an external scheduler — <em>j</em> can
+step next. Here only the lock holder steps, and control moves only at
+<code>yield</code>, so <em>j</em> may be poised over a conflicting access and
+unable to move for arbitrarily long, or forever. That is not an oversight: it is
+the same cooperative discipline that lets <code>wpi_open_invariant</code> dispense
+with an atomicity side condition (<a href="#handler">§4</a>). <strong>The
+simpler program logic and the weaker race statement are the same design decision
+seen from two sides.</strong></li>
+</ol>
+
+<p>So the honest summary is that λRust buys a stronger, standard-facing statement
+at the price of a second definition that must be kept in sync by hand, and we buy
+a definition that cannot drift at the price of a weaker statement that leans on
+how the API is written. Which is the better trade depends on what the statement
+is for — and if this development ever needs the standard-facing version, adding
+it is a real piece of work, not a rephrasing.</p>
+
+<h3>The compatibility table, derived rather than declared</h3>
+<p>λRust <em>defines</em> which pairs race. Here it is a consequence of the
+transitions, proved one row at a time:</p>
+<details><summary>read ∥ read compatible — extracted</summary><div class="panelbody"><pre class="lean"><code>theorem read_read_compatible (σ σ&#x27; : RustHeap.{0}) (l : Loc)
+    (h : readAcquireF l σ = some σ&#x27;) : (readAcquireF l σ&#x27;).isSome := by
+  obtain ⟨n, v, hg⟩ := (readAcquire_enabled σ l).mp (by rw [h]; rfl)
+  refine (readAcquire_enabled σ&#x27; l).mpr ⟨n + 1, v, ?_⟩
+  rw [readAcquireF, hg] at h
+  rw [← Option.some.inj h, Std.get?_insert_eq (rfl : l = l)]</code></pre></div></details>
+<details><summary>write ∥ read incompatible — extracted</summary><div class="panelbody"><pre class="lean"><code>theorem write_read_incompatible (σ σ&#x27; : RustHeap.{0}) (l : Loc)
+    (h : writeAcquireF l σ = some σ&#x27;) : ¬ (readAcquireF l σ&#x27;).isSome := by
+  intro hcon
+  obtain ⟨v, hg⟩ := (writeAcquire_enabled σ l).mp (by rw [h]; rfl)
+  obtain ⟨n, w, hg&#x27;⟩ := (readAcquire_enabled σ&#x27; l).mp hcon
+  rw [writeAcquireF, hg] at h
+  rw [← Option.some.inj h, Std.get?_insert_eq (rfl : l = l)] at hg&#x27;
+  exact absurd hg&#x27; (by simp)</code></pre></div></details>
+<details><summary>write ∥ write incompatible — extracted</summary><div class="panelbody"><pre class="lean"><code>theorem write_write_incompatible (σ σ&#x27; : RustHeap.{0}) (l : Loc)
+    (h : writeAcquireF l σ = some σ&#x27;) : ¬ (writeAcquireF l σ&#x27;).isSome := by
+  intro hcon
+  obtain ⟨v, hg⟩ := (writeAcquire_enabled σ l).mp (by rw [h]; rfl)
+  obtain ⟨w, hg&#x27;⟩ := (writeAcquire_enabled σ&#x27; l).mp hcon
+  rw [writeAcquireF, hg] at h
+  rw [← Option.some.inj h, Std.get?_insert_eq (rfl : l = l)] at hg&#x27;
+  exact absurd hg&#x27; (by simp)</code></pre></div></details>
+<details><summary>read ∥ write incompatible — extracted</summary><div class="panelbody"><pre class="lean"><code>theorem read_write_incompatible (σ σ&#x27; : RustHeap.{0}) (l : Loc)
+    (h : readAcquireF l σ = some σ&#x27;) : ¬ (writeAcquireF l σ&#x27;).isSome := by
+  intro hcon
+  obtain ⟨n, v, hg⟩ := (readAcquire_enabled σ l).mp (by rw [h]; rfl)
+  obtain ⟨w, hg&#x27;⟩ := (writeAcquire_enabled σ&#x27; l).mp hcon
+  rw [readAcquireF, hg] at h
+  rw [← Option.some.inj h, Std.get?_insert_eq (rfl : l = l)] at hg&#x27;
+  exact absurd hg&#x27; (by simp)</code></pre></div></details>
+<details><summary>atomic ∥ atomic compatible — extracted</summary><div class="panelbody"><pre class="lean"><code>theorem atomic_atomic_compatible (σ σ&#x27; : RustHeap.{0}) (l : Loc) (v w : Val.{0})
+    (h : storeAtF l v σ = some σ&#x27;) : (storeAtF l w σ&#x27;).isSome := by
+  obtain ⟨u, hg⟩ := (storeAt_enabled σ l v).mp (by rw [h]; rfl)
+  refine (storeAt_enabled σ&#x27; l w).mpr ⟨v, ?_⟩
+  rw [storeAtF, hg] at h
+  rw [← Option.some.inj h, Std.get?_insert_eq (rfl : l = l)]</code></pre></div></details>
+<details><summary>read ∥ free incompatible (use-after-free) — extracted</summary><div class="panelbody"><pre class="lean"><code>theorem read_free_incompatible (σ σ&#x27; : RustHeap.{0}) (l : Loc)
+    (h : readAcquireF l σ = some σ&#x27;) : ¬ (freeF l σ&#x27;).isSome := by
+  intro hcon
+  obtain ⟨n, v, hg⟩ := (readAcquire_enabled σ l).mp (by rw [h]; rfl)
+  obtain ⟨w, hg&#x27;⟩ := (free_enabled σ&#x27; l).mp hcon
+  rw [readAcquireF, hg] at h
+  rw [← Option.some.inj h, Std.get?_insert_eq (rfl : l = l)] at hg&#x27;
+  exact absurd hg&#x27; (by simp)</code></pre></div></details>
+</section><section id="theorems"><h2>8 · What is proved</h2>
+<p>The hypothesis, in every case, is one <code>wpi</code> triple:</p>
+<pre class="lean"><code>def ProvableSpec (m : Mode) {α : Type} (t : Result α) (φ : α → Prop) : Prop :=
+  ∀ (GF : BundledGFunctors) (hlc : Iris.HasLC) [Iris.InvGS_gen hlc GF]
+    [HeapGS.{0} GF],
+    ⦃ emp ⦄ t @ (Rust.rustH (GF := GF) m) ; m ; ⊤ ⦃ v, ⌜φ v⌝ ⦄</code></pre>
+<pre class="lean"><code>theorem adequacy_part {α : Type} (t : Result α) (φ : α → Prop)
+    (h : ProvableSpec .part t φ) :
+    Safe t ∧ ∀ v, MayReturn t v → φ v :=
+  ⟨safe_of_provable h, post_of_provable h⟩</code></pre>
+<pre class="lean"><code>theorem adequacy_total {α : Type} (t : Result α) (φ : α → Prop)
+    (h : ProvableSpec .total t φ) :
+    Safe t ∧ (∀ v, MayReturn t v → φ v) ∧ Terminates t := by
+  have hpart := h.total_to_part
+  exact ⟨safe_of_provable hpart, post_of_provable hpart, terminates_of_provable h⟩</code></pre>
+
+<details open><summary>Safe, MayReturn, SN, Terminates — extracted</summary><div class="panelbody"><pre class="lean"><code>def Safe {α : Type} (t : Result α) : Prop :=
+  ∀ c, Reaches (init t) c → ¬ c.Faulty</code></pre><pre class="lean"><code>def MayReturn {α : Type} (t : Result α) (v : α) : Prop :=
+  ∃ c, Reaches (init t) c ∧ c.current = 0 ∧ c.focus = some (Result.ok v)</code></pre><pre class="lean"><code>def SN {α : Type} (c : Config α) : Prop :=
+  Acc (fun c₂ c₁ =&gt; Step c₁ c₂) c</code></pre><pre class="lean"><code>def Terminates {α : Type} (t : Result α) : Prop :=
+  ∀ c, Reaches (init t) c → SN c ∧ ¬ c.Diverging</code></pre></div></details>
+
+<pre class="axioms"><code>'adequacy_part'  depends on axioms: [propext, Classical.choice, Quot.sound]
+'adequacy_total' depends on axioms: [propext, Classical.choice, Quot.sound]</code></pre>
+
+<h3>Non-vacuity</h3>
+<p>Every theorem here has the form "<em>nothing bad happens</em>", and such a
+statement is worth exactly as much as the badness it excludes. If
+<code>Config.Faulty</code> were unsatisfiable, <code>Safe</code> would hold of every
+program and <code>adequacy_part</code> would be a tautology —
+and no amount of worked examples would reveal it, because examples only ever
+prove the good side.</p>
+<p><code>Semantics/Vacuity.lean</code> proves the other side:
+<code>panicProg_unsafe</code> and <code>loadProg_unsafe</code> inhabit
+<code>Panics</code> and <code>StuckOn</code> separately, and <code>racer</code> is a
+two-thread program with an explicit five-step trace to a racing configuration.
+The strongest of them is</p>
+<pre class="lean"><code>racer_unprovable : ∀ φ, ¬ ProvableSpecOf .part racer φ</code></pre>
+<p>— for a racing program, <em>no</em> <code>wpi</code> triple exists, whatever the
+postcondition. Race freedom is enforced by the logic, not a coincidence of the
+examples.</p>
+</section><section id="weak"><h2>9 · What to check, and what is known wrong</h2>
+<p>The questions worth asking of this model, and the honest answers.</p>
+
+<h3>Known weaknesses</h3>
+<p class="warn"><strong>A non-main thread sitting on <code>ret</code> freezes the
+machine.</strong> A returned thread takes no step, and <code>yield</code> is the
+only rule that changes <code>current</code>. So if the scheduler hands the lock to
+a thread that then returns, no rule applies and the configuration is final — with
+other threads still alive and holding pending work. <code>Config.Halted</code>
+classifies this as a legitimate halt. Rust does the opposite: a spawned thread
+that returns ends only itself. The fix is a <code>Step</code> rule retiring a
+non-main returning thread, exactly as <code>endthread</code> does; provable
+programs are unaffected either way, because the logic already forces a forked
+child's postcondition to be <code>False</code>.</p>
+
+<p><strong>Nothing is concluded about the final heap.</strong>
+<code>ProvableSpec</code> fixes a <em>pure</em> postcondition, which is forced:
+<code>fupd_plain_mask</code> needs <code>Plain</code>, and that instance exists only
+at <code>HasLC.hasNoLC</code>. A consequence is that clients may not use later
+credits, and there is no <code>wp_invariance</code> analogue here.</p>
+
+<p><strong>Return types are restricted to <code>Type 0</code>.</strong> A Rust
+function returning a <code>Type 1</code> value is outside these statements. Nothing
+in the proofs depends on the restriction.</p>
+
+<h3>Questions this page is meant to let you answer</h3>
+<ul>
+<li>Is the <em>enabling condition</em> of each heap operation the one you intend?
+(§2, §3 — each is an <code>↔</code>, so both directions are checkable.)</li>
+<li>Is <code>yield</code> in the right place inside <code>load_na</code> /
+<code>store_na</code>? Everything about interference follows from that placement.</li>
+<li>Are the five machine rules the ones you want, and is <code>yield</code>'s
+choice of <code>j</code> as unconstrained as you expect? (§5)</li>
+<li>Is <code>RacesOn</code> the notion of race you want, given that it is
+manifested rather than potential? (§7)</li>
+<li>Does every hand-written model in <code>FunsExternal.lean</code> go through
+acquire/release, or at least never touch a cell whose access state it ignores? A
+raw transformer bypasses race detection entirely — see the third gap in
+<a href="#races">§7</a>. This is the one caveat that applies to code someone
+may add tomorrow.</li>
+<li>Is the <code>ret</code>-freezes-the-machine behaviour acceptable, or should
+the rule be added? (above)</li>
+</ul>
+</section>
+</main></div><script>
+window.addEventListener("DOMContentLoaded", function () {
+  if (typeof katex === "undefined") {
+    // No network for the CDN: reveal the Lean instead of showing raw TeX.
+    document.querySelectorAll(".rule .tex").forEach(function (e) {
+      e.textContent = "(KaTeX unavailable — see the Lean below)";
+    });
+    document.querySelectorAll(".rule details").forEach(function (d) {
+      d.open = true;
+    });
+    return;
+  }
+  var M = {"\\focus": "\\mathrm{focus}", "\\heap": "\\mathrm{heap}", "\\cur": "\\mathrm{cur}", "\\threads": "\\mathrm{threads}", "\\killt": "\\mathrm{kill}", "\\alive": "\\mathrm{alive}", "\\alivet": "\\mathsf{alive}", "\\setidx": "\\mathrm{set}", "\\dplus": "\\mathbin{+\\!\\!+}", "\\stepto": "\\longrightarrow", "\\stepsto": "\\longrightarrow^{*}", "\\opstep": "\\mathsf{step}", "\\opyield": "\\mathsf{yield}", "\\opfork": "\\mathsf{fork}", "\\opend": "\\mathsf{endthread}", "\\opmod": "\\mathsf{modify}", "\\tagcur": "\\mathsf{cur}", "\\tagnew": "\\mathsf{new}", "\\vis": "\\mathsf{vis}\\;#1\\;#2"};
+  document.querySelectorAll(".rule .tex").forEach(function (e) {
+    try { katex.render(e.getAttribute("data-tex"), e,
+                       { displayMode: true, throwOnError: false, macros: M }); }
+    catch (err) { e.textContent = e.getAttribute("data-tex"); }
+  });
+});
+</script>
+</body></html>

@@ -1,19 +1,26 @@
-import AeneasIris.wpi
+import AeneasIris.Wpi
 import AeneasIris.Rules
-import AeneasIris.Conc
-import AeneasIris.Fail
-import AeneasIris.Step
-import AeneasIris.Heap
-import AeneasIris.HeapAPI
-import AeneasIris.RwLock
-import AeneasIris.RwLockLAT
-import AeneasIris.Arc
-import AeneasIris.ArcLAT
-import AeneasIris.RustHandler
-import AeneasIris.ISpec
-import AeneasIris.Triple
-import AeneasIris.Tactics
-import AeneasIris.ConcAPI
-import AeneasIris.Zoo
-import AeneasIris.Test
+import AeneasIris.Tactics.ISpec
+import AeneasIris.Tactics.Triple
+import AeneasIris.Tactics.Core
 import AeneasIris.AtomicWpi
+
+import AeneasIris.Effects.Fail
+import AeneasIris.Effects.Step
+import AeneasIris.Effects.Heap
+import AeneasIris.Effects.HeapAPI
+import AeneasIris.Effects.Conc
+import AeneasIris.Effects.ConcAPI
+import AeneasIris.Rust
+
+import AeneasIris.Lib.RwLockAPI
+import AeneasIris.Lib.RwLockImpl
+
+import AeneasIris.Lib.ArcAPI
+import AeneasIris.Lib.ArcImpl
+
+import AeneasIris.Tests.Basic
+import AeneasIris.Tests.Zoo
+import AeneasIris.Tests.HeapAPI
+import AeneasIris.Tests.Rust
+import AeneasIris.Tests.AtomicWpi
