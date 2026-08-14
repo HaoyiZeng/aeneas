@@ -103,6 +103,21 @@ theorem iSpec_of_IASpec {Hd : Handler Eff GF} {m : Mode} {Pre : IProp GF}
       · iexact Hβ
       · iexact HPost
 
+/-- `IASpec` as an entailment, which is the shape `irule` can apply: the ordinary
+precondition is framed out of the context and the update is left as a goal. -/
+theorem IASpec.wand {Hd : Handler Eff GF} {m : Mode} {Pre : IProp GF}
+    {t : ITree Eff V} {E : CoPset} {α : A → IProp GF} {β : A → B → IProp GF}
+    {POST : A → B → P → IProp GF} {f : A → B → P → V}
+    (h : IASpec Hd m Pre t E α β POST f) (Φ : Post GF V) :
+    ⊢ iprop(Pre -∗
+        (|={⊤ \ E, ∅}=> ∃ x, α x ∗
+          (∀ y, β x y -∗ |={∅, ⊤ \ E}=> ∀ z, POST x y z -∗ Φ (f x y z))) -∗
+        wpi_mask GF Hd m t Φ ⊤) := by
+  unfold IASpec at h
+  iintro HPre HU
+  ihave Hspec := h
+  iapply Hspec $$ %_ HPre HU
+
 end Spec
 
 section Notation

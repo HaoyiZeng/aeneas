@@ -44,26 +44,25 @@ example (l : Loc) (N : Namespace) :
     ⊢ Iris.inv N iprop(∃ v : Nat, l ↦ v) -∗
       wpi_mask GF Hd m (AtomicHeapAPI.load (E := E) (T := Nat) l)
         (fun _ => iprop(True)) ⊤ := by
-  have hspec := AtomicHeapAPI.load_spec (E := E) (T := Nat) (Hd := Hd) (m := m) l (DFrac.own 1)
-  unfold AeneasIris.OneShotWpi.IASpec at hspec
   iintro #Hinv
-  iapply hspec
+  iapply (AeneasIris.OneShotWpi.IASpec.wand
+    (AtomicHeapAPI.load_spec (E := E) (T := Nat) l (DFrac.own 1)) _) $$ []
   · itrivial
-  · iinv_atomic Hinv with ⟨⟨%v, Hl⟩, Hcl⟩ back Hback
-    iexists v
-    isplitl [Hl]
-    · iexact Hl
-    · imodintro
-      iintro %_y Hl'
-      imod Hback
-      ihave HI : iprop(∃ w : Nat, l ↦ w) $$ [Hl']
-      · iexists v
-        iexact Hl'
-      ispecialize Hcl $$ HI
-      imod Hcl
-      imodintro
-      iintro %_z _
-      itrivial
+  iinv_atomic Hinv with ⟨⟨%v, Hl⟩, Hcl⟩ back Hback
+  iexists v
+  isplitl [Hl]
+  · iexact Hl
+  · imodintro
+    iintro %_y Hl'
+    imod Hback
+    ihave HI : iprop(∃ w : Nat, l ↦ w) $$ [Hl']
+    · iexists v
+      iexact Hl'
+    ispecialize Hcl $$ HI
+    imod Hcl
+    imodintro
+    iintro %_z _
+    itrivial
 
 end Examples
 
