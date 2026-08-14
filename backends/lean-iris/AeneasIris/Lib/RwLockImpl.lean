@@ -1711,8 +1711,11 @@ theorem drop_spec (γ : GName) (lk : Handle T) (v : T) (M : CoPset) :
 Every field is one of the definitions or theorems above; nothing is proved here.
 -/
 
-noncomputable instance instRwLockAPI :
-    RwLockAPI GF Hd m T (Handle T) (ReadGuard T) (WriteGuard T) where
+noncomputable instance instRwLockAPI : RwLockAPI GF Hd m where
+  RwLock := Handle
+  ReadGuard := ReadGuard
+  WriteGuard := WriteGuard
+
   new := new
   drop := drop
   try_read := try_read

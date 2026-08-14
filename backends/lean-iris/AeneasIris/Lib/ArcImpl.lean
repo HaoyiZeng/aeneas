@@ -1847,7 +1847,10 @@ theorem dangling_drop_spec (w : WeakHandle T) (M : CoPset) :
   itrivial
 
 noncomputable instance instArcAPI [stepH GF Mode.part -<ₕ Hd] :
-    ArcAPI GF Hd m T (Handle T) (WeakHandle T) where
+    ArcAPI GF Hd m T where
+  Arc := Handle
+  Weak := WeakHandle
+
   new := new
   deref := deref
   strong_count := strong_count

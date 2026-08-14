@@ -53,6 +53,16 @@ noncomputable def cas {T : Type} (l : Loc) (old new : T) : ITree E Bool :=
 noncomputable def faa {T : Type} [Nonempty T] [Add T] (l : Loc) (n : T) : ITree E T :=
   Conc.sync (HeapAPI.faa (E := E) l n)
 
+/-- Deallocation synchronises: whoever frees must see every access made through
+every reference that is being given up, which is the `Acquire` fence Rust's
+`Arc::drop` performs before `drop_slow`.
+
+`alloc` has no counterpart here on purpose.  A freshly allocated location is not
+reachable by any other thread until it is published, so there is nothing for an
+interference point to expose; use `HeapAPI.alloc`. -/
+noncomputable def free (l : Loc) : ITree E PUnit.{1} :=
+  Conc.sync (HeapAPI.free (E := E) l)
+
 /-! ## Logically atomic specifications
 
 The `yield` is taken first, at mask `⊤`, and only then is the atomic update
@@ -116,6 +126,7 @@ theorem load_spec {T : Type} [Nonempty T] (l : Loc) (dq : DFrac) :
   itrivial
 
 /-- Writing: the caller hands over the cell at whatever value it holds. -/
+@[istep_rule atomic]
 theorem store_spec {T U : Type} (l : Loc) (w : U) :
     ⟪ ∀ v, l ↦ (v : T) ⟫ Hd m (store (E := E) l w) @ (∅ : CoPset)
       ⟪ l ↦ w ⟫ ⦃ RET PUnit.unit ⦄ := by
@@ -140,6 +151,7 @@ theorem store_triple {T U : Type} (l : Loc) (v : T) (w : U) :
   iexact Hl'
 
 /-- Read-modify-write: the old value comes back, the new one is `+ n`. -/
+@[istep_rule atomic]
 theorem faa_spec {T : Type} [Nonempty T] [Add T] (l : Loc) (n : T) :
     ⟪ ∀ v, l ↦ (v : T) ⟫ Hd m (faa (E := E) l n) @ (∅ : CoPset)
       ⟪ l ↦ (v + n) ⟫ ⦃ RET v ⦄ := by
@@ -165,6 +177,31 @@ theorem faa_triple {T : Type} [Nonempty T] [Add T] (l : Loc) (v n : T) :
   · itrivial
   · iexact Hl
 
+@[istep_rule atomic]
+theorem free_spec {T : Type} (l : Loc) :
+    ⟪ ∀ v, l ↦ (v : T) ⟫ Hd m (free (E := E) l) @ (∅ : CoPset)
+      ⟪ emp ⟫ ⦃ RET PUnit.unit ⦄ := by
+  unfold IASpec
+  iintro %Φ _ HAU
+  simp only [free, top_sdiff_empty]
+  istep
+  iapply (AeneasIris.wpi_clear_mask (H := Hd) _ Φ ⊤).mp
+  imod HAU with ⟨%v, Hl, Hclose⟩
+  imodintro
+  istep
+  iapply Hclose $$ %() []
+  · first | exact () | itrivial
+  · first | exact () | itrivial
+  · first | exact () | itrivial
+
+@[istep_rule]
+theorem free_triple {T : Type} (l : Loc) (v : T) :
+    ⦃ l ↦ v ⦄ (free (E := E) l) @ Hd ; m ; ⊤ ⦃ _r, emp ⦄ := by
+  iintro Hl
+  simp only [free]
+  istep
+  itrivial
+
 /-! ### Compare-and-swap
 
 `HeapAPI` states the two outcomes separately, which suits a caller that already
@@ -179,6 +216,7 @@ representation into a statement its callers have to read. -/
 theorem pack_inj {T : Type} {a b : T} : Val.pack a = Val.pack b ↔ a = b :=
   ⟨fun h => eq_of_heq (Sigma.mk.inj h).2, fun h => by rw [h]⟩
 
+@[istep_rule atomic]
 theorem cas_spec [DecidableEq Val.{0}] {T : Type} [DecidableEq T]
     (l : Loc) (old new : T) :
     ⟪ ∀ v, l ↦ (v : T) ⟫ Hd m (cas (E := E) l old new) @ (∅ : CoPset)

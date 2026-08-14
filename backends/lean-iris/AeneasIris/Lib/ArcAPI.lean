@@ -17,9 +17,14 @@ variable {hlc : Iris.HasLC}
 predicates, and the laws relating them.
 
 Generic in the effect row `E`, the handler `Hd` and the `Mode`, so a client
-programs against the interface at whatever language it is itself written in. The
-carrier types are `outParam`s: an implementation chooses them, and a client names
-them without spelling out which implementation it meant.
+programs against the interface at whatever language it is itself written in.
+
+The carriers are fields, not parameters: an implementation supplies both
+together, and no client should be able to pair one implementation's `Arc` with
+another's `Weak`.  They are type *constructors*, so they read as `Arc T` does in
+Rust -- but unlike `RwLockAPI` the class still fixes one `T`, because the ghost
+state stores the payload (`ArcMeta T = LeibnizO (Arc T × T)`) and so `ArcG GF T`
+is per-`T`; a single `GF` cannot supply it for every `T`.
 
 The shared resource is `arcAuth γ n k` -- the control block and the two counts --
 and every operation that moves a count is stated as an atomic triple against it.
@@ -28,35 +33,37 @@ needs nothing shared, which is the whole point of an `Arc`.
 
 Weak references come in two kinds, and which spec applies is decided by the
 *resource* a client holds, `isWeak γ w v` or `isDanglingWeak w`, never by
-inspecting `w`. So there is no law saying what shape a `WeakHandle` may take: an
+inspecting `w`. So there is no law saying what shape a `Weak T` may take: an
 implementation is free to represent one however it likes. -/
 class ArcAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
-    {E : Effect.{1}} (Hd : Handler E GF) (m : Mode) (T : Type)
-    (Handle WeakHandle : outParam Type) where
-  new : T → ITree E Handle
-  deref : Handle → ITree E T
-  strong_count : Handle → ITree E Int
-  clone : Handle → ITree E Handle
-  downgrade : Handle → ITree E WeakHandle
-  drop_strong : Handle → ITree E Bool
-  weak_clone : WeakHandle → ITree E WeakHandle
-  weak_drop : WeakHandle → ITree E Unit
-  weak_upgrade : WeakHandle → ITree E (Option Handle)
-  weak_strong_count : WeakHandle → ITree E Int
+    {E : Effect.{1}} (Hd : Handler E GF) (m : Mode) (T : Type) where
+  Arc : Type → Type
+  Weak : Type → Type
+
+  new : T → ITree E (Arc T)
+  deref : Arc T → ITree E T
+  strong_count : Arc T → ITree E Int
+  clone : Arc T → ITree E (Arc T)
+  downgrade : Arc T → ITree E (Weak T)
+  drop_strong : Arc T → ITree E Bool
+  weak_clone : Weak T → ITree E (Weak T)
+  weak_drop : Weak T → ITree E Unit
+  weak_upgrade : Weak T → ITree E (Option (Arc T))
+  weak_strong_count : Weak T → ITree E Int
 
   /-- `Weak::new()`. A value rather than an operation: making one allocates
   nothing. Every other weak handle a client meets is bound by the spec of the
   operation that produced it, so this is the only one the interface names. -/
-  weak_new : WeakHandle
+  weak_new : Weak T
   /-- The `Arc` itself: `n` strong references and `k` weak ones. -/
   arcAuth : GName → Nat → Nat → IProp GF
   /-- One strong reference to `a`, whose payload is `v`. -/
-  isArc : GName → Handle → T → IProp GF
+  isArc : GName → Arc T → T → IProp GF
   /-- One weak reference, held through `w`. -/
-  isWeak : GName → WeakHandle → T → IProp GF
+  isWeak : GName → Weak T → T → IProp GF
   /-- `w` points at no control block. Persistent: it is a fact about `w` rather
   than a permission, which is what makes the dangling operations no-ops. -/
-  isDanglingWeak : WeakHandle → IProp GF
+  isDanglingWeak : Weak T → IProp GF
 
   arcAuth_timeless γ n k : Timeless (arcAuth γ n k)
   isArc_timeless γ a v : Timeless (isArc γ a v)
@@ -80,33 +87,33 @@ class ArcAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
     ⦃ emp ⦄ (new v) @ Hd ; m ; M
     ⦃ a, ∃ γ, arcAuth γ 1 0 ∗ isArc γ a v ⦄
 
-  deref_spec (γ : GName) (a : Handle) (v : T) (M : CoPset) :
+  deref_spec (γ : GName) (a : Arc T) (v : T) (M : CoPset) :
     ⦃ isArc γ a v ⦄ (deref a) @ Hd ; m ; M
     ⦃ r, ⌜r = v⌝ ∗ isArc γ a v ⦄
 
-  strong_count_spec (γ : GName) (a : Handle) (v : T) :
+  strong_count_spec (γ : GName) (a : Arc T) (v : T) :
     ⊢ isArc γ a v -∗
       ⟪ ∀ n k, arcAuth γ n k ⟫ Hd m (strong_count a) @ (∅ : CoPset)
       ⟪ arcAuth γ n k | RET (n : Int); isArc γ a v ⟫
 
-  clone_spec (γ : GName) (a : Handle) (v : T) :
+  clone_spec (γ : GName) (a : Arc T) (v : T) :
     ⊢ isArc γ a v -∗
       ⟪ ∀ n k, arcAuth γ n k ⟫ Hd m (clone a) @ (∅ : CoPset)
       ⟪ arcAuth γ (n + 1) k | RET a; isArc γ a v ∗ isArc γ a v ⟫
 
-  downgrade_spec (γ : GName) (a : Handle) (v : T) :
+  downgrade_spec (γ : GName) (a : Arc T) (v : T) :
     ⊢ isArc γ a v -∗
       ⟪ ∀ n k, arcAuth γ n k ⟫ Hd m (downgrade a) @ (∅ : CoPset)
       ⟪ arcAuth γ n (k + 1)
       | w, RET w; isArc γ a v ∗ isWeak γ w v ⟫
 
-  drop_strong_spec (γ : GName) (a : Handle) (v : T) :
+  drop_strong_spec (γ : GName) (a : Arc T) (v : T) :
     ⊢ isArc γ a v -∗
       ⟪ ∀ n k, arcAuth γ n k ⟫ Hd m (drop_strong a) @ (∅ : CoPset)
       ⟪ arcAuth γ (n - 1) (if n = 1 then k + 1 else k)
       | w, RET (decide (n = 1)); if n = 1 then isWeak γ w v else emp ⟫
 
-  weak_clone_spec (γ : GName) (w : WeakHandle) (v : T) :
+  weak_clone_spec (γ : GName) (w : Weak T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth γ n k ⟫ Hd m (weak_clone w) @ (∅ : CoPset)
       ⟪ arcAuth γ n (k + 1) | RET w; isWeak γ w v ∗ isWeak γ w v ⟫
@@ -114,31 +121,31 @@ class ArcAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
   /-- Upgrading a live weak retries its compare-and-swap, so it is only
   partially correct: a thread that keeps losing the race owes nothing. The
   dangling case below spins on nothing and so keeps the client's own mode. -/
-  weak_upgrade_spec (γ : GName) (w : WeakHandle) (v : T) :
+  weak_upgrade_spec (γ : GName) (w : Weak T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth γ n k ⟫ Hd .part (weak_upgrade w) @ (∅ : CoPset)
       ⟪ arcAuth γ (if n = 0 then 0 else n + 1) k
       | a, RET (if n = 0 then none else some a)
       ; isWeak γ w v ∗ (if n = 0 then emp else isArc γ a v) ⟫
 
-  weak_strong_count_spec (γ : GName) (w : WeakHandle) (v : T) :
+  weak_strong_count_spec (γ : GName) (w : Weak T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth γ n k ⟫ Hd m (weak_strong_count w) @ (∅ : CoPset)
       ⟪ arcAuth γ n k | RET (n : Int); isWeak γ w v ⟫
 
-  weak_drop_spec (γ : GName) (w : WeakHandle) (v : T) :
+  weak_drop_spec (γ : GName) (w : Weak T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth γ n k ⟫ Hd m (weak_drop w) @ (∅ : CoPset)
       ⟪ arcAuth γ n (k - 1) | RET () ⟫
 
-  dangling_clone_spec (w : WeakHandle) (M : CoPset) :
+  dangling_clone_spec (w : Weak T) (M : CoPset) :
     ⦃ isDanglingWeak w ⦄ (weak_clone w) @ Hd ; m ; M
     ⦃ r, ⌜r = w⌝ ∗ isDanglingWeak w ⦄
-  dangling_upgrade_spec (w : WeakHandle) (M : CoPset) :
+  dangling_upgrade_spec (w : Weak T) (M : CoPset) :
     ⦃ isDanglingWeak w ⦄ (weak_upgrade w) @ Hd ; m ; M ⦃ r, ⌜r = none⌝ ⦄
-  dangling_strong_count_spec (w : WeakHandle) (M : CoPset) :
+  dangling_strong_count_spec (w : Weak T) (M : CoPset) :
     ⦃ isDanglingWeak w ⦄ (weak_strong_count w) @ Hd ; m ; M ⦃ r, ⌜r = 0⌝ ⦄
-  dangling_drop_spec (w : WeakHandle) (M : CoPset) :
+  dangling_drop_spec (w : Weak T) (M : CoPset) :
     ⦃ isDanglingWeak w ⦄ (weak_drop w) @ Hd ; m ; M ⦃ _r, emp ⦄
 
 attribute [instance] ArcAPI.arcAuth_timeless ArcAPI.isArc_timeless

@@ -65,6 +65,41 @@ example (l : Loc) (N : Namespace) :
     ipureintro
     exact hv
 
+/-- A shared compare-and-swap.  The invariant keeps the cell positive; the CAS
+either succeeds, installing a value the caller must show keeps that true, or
+fails and changes nothing.  Either way the invariant is restored, so a caller
+learns the outcome without ever knowing what the cell held. -/
+example (l : Loc) (N : Namespace) (old new : Nat) (hnew : 0 < new) :
+    ⊢ Iris.inv N iprop(∃ v : Nat, l ↦ v ∗ ⌜0 < v⌝) -∗
+      wpi_mask GF Hd m (AtomicHeapAPI.cas (E := E) (T := Nat) l old new)
+        (fun _ => iprop(True)) ⊤ := by
+  iintro #Hinv
+  istep
+  iinv_atomic Hinv with ⟨⟨%v, Hl, %hv⟩, Hcl⟩ back Hback
+  iexists v
+  isplitl [Hl]
+  · iexact Hl
+  · imodintro
+    iintro %_y Hl'
+    imod Hback
+    ihave HI : iprop(∃ w : Nat, l ↦ w ∗ ⌜0 < w⌝) $$ [Hl']
+    · by_cases hc : v = old
+      · simp only [hc, if_pos]
+        iexists new
+        isplitl [Hl']
+        · iexact Hl'
+        · ipureintro; exact hnew
+      · simp only [hc, if_false]
+        iexists v
+        isplitl [Hl']
+        · iexact Hl'
+        · ipureintro; exact hv
+    ispecialize Hcl $$ HI
+    imod Hcl
+    imodintro
+    iintro %_z _
+    itrivial
+
 end Examples
 
 end AeneasIris.Tests.AtomicHeapAPI
