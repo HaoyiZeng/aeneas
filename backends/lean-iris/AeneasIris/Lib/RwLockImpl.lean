@@ -370,8 +370,9 @@ def mkWriteGuard (lk : Handle T) : WriteGuard T := ⟨lk⟩
 section Code
 
 variable {E : Effect.{1}} [StateE RustHeap.{0} -< E] [StepE.{1} -< E]
+variable [Aeneas.Std.FailE.{1} -< E]
 variable [Aeneas.Std.ConcE.{1} -< E]
-variable {T : Type} [Nonempty T]
+variable {T : Type}
 
 noncomputable def new (v : T) : ITree E (Handle T) := do
   let d ← alloc v
@@ -705,12 +706,13 @@ section
 
 variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF] [HeapGS.{0} GF] [RwSpinG GF]
 variable {E : Effect.{1}} [StateE RustHeap.{0} -< E] [StepE.{1} -< E]
+variable [Aeneas.Std.FailE.{1} -< E]
 variable [Aeneas.Std.ConcE.{1} -< E]
 variable {Hd : Handler E GF} [stateH heapInterp -<ₕ Hd]
 variable {m : Mode} [stepH GF m -<ₕ Hd]
 
 variable [ConcH GF -<ₕ Hd]
-variable {T : Type} [Nonempty T]
+variable {T : Type}
 
 /-! ## Allocation -/
 
@@ -782,7 +784,6 @@ theorem write_release_spec (γ : GName) (g : WriteGuard T) (v₁ : T) :
     simp only [AtomicWpi.wandM_none]
     iapply HΨ $$ %()
 
-omit [Nonempty T] in
 /-- The compare-and-swap on its own, without the release the caller is handed.
 `write_acquire` spins on this one, so it is stated separately. -/
 theorem try_write_acquire_spec (γ : GName) (lk : Handle T) :
@@ -852,8 +853,8 @@ theorem try_write_acquire_spec (γ : GName) (lk : Handle T) :
         · first | itrivial | exact ()
         · itrivial
     · intro h
-      have h2 := congrArg (fun w : Aeneas.Std.Val.{0} => Aeneas.Std.Val.unpack Int w) h
-      simp only [Aeneas.Std.Val.unpack_pack] at h2
+      have h2 := congrArg (fun w : Aeneas.Std.Val.{0} => Aeneas.Std.Val.unpackO Int w) h
+      simp only [Aeneas.Std.Val.unpackO_pack, Option.some.injEq] at h2
       exact hs (LockState.word_injective (show s.word = LockState.free.word from h2))
 theorem try_write_spec (γ : GName) (lk : Handle T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd m (try_write (E := E) lk) @ (∅ : CoPset)
@@ -938,8 +939,8 @@ theorem try_write_spec (γ : GName) (lk : Handle T) :
         simp only [if_neg hs]
         itrivial
     · intro h
-      have h2 := congrArg (fun w : Aeneas.Std.Val.{0} => Aeneas.Std.Val.unpack Int w) h
-      simp only [Aeneas.Std.Val.unpack_pack] at h2
+      have h2 := congrArg (fun w : Aeneas.Std.Val.{0} => Aeneas.Std.Val.unpackO Int w) h
+      simp only [Aeneas.Std.Val.unpackO_pack, Option.some.injEq] at h2
       exact hs (LockState.word_injective (show s.word = LockState.free.word from h2))
 
 
@@ -1051,8 +1052,8 @@ theorem write_spec (γ : GName) (lk : Handle T) :
         istep
         iapply IH $$ HAU'
     · intro h
-      have h2 := congrArg (fun w : Aeneas.Std.Val.{0} => Aeneas.Std.Val.unpack Int w) h
-      simp only [Aeneas.Std.Val.unpack_pack] at h2
+      have h2 := congrArg (fun w : Aeneas.Std.Val.{0} => Aeneas.Std.Val.unpackO Int w) h
+      simp only [Aeneas.Std.Val.unpackO_pack, Option.some.injEq] at h2
       exact hs (LockState.word_injective (show s.word = LockState.free.word from h2))
 
 /-- What a reader holds beyond the lock: its credit and its share of the cell. -/

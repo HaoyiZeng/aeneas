@@ -16,7 +16,7 @@ section
 
 variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF]
 variable [G : HeapGS.{u} GF]
-variable {E : Effect} [StateE RustHeap -< E] [StepE -< E]
+variable {E : Effect} [StateE RustHeap -< E] [StepE -< E] [Aeneas.Std.FailE -< E]
 variable {Hd : Handler E GF} [stateH heapInterp -<ₕ Hd]
 variable {m : Mode} [stepH GF m -<ₕ Hd]
 
@@ -33,7 +33,7 @@ theorem pointsTo_split (l : Loc) (q₁ q₂ : Qp) {T : Type u} (v : T) :
   Fractional.fractional (Φ := fun q : Qp => pointsToC l (.own q) (.reading 0) (Val.pack v))
     q₁ q₂
 
-noncomputable def load {T : Type u} [Nonempty T] (l : Loc) : ITree E T :=
+noncomputable def load {T : Type u} (l : Loc) : ITree E T :=
   load_at T l
 
 def store {T : Type u} (l : Loc) (v : T) : ITree E PUnit.{u+1} :=
@@ -42,7 +42,7 @@ def store {T : Type u} (l : Loc) (v : T) : ITree E PUnit.{u+1} :=
 noncomputable def cas {T : Type u} (l : Loc) (old new : T) : ITree E Bool :=
   Heap.cas l (Val.pack old) (Val.pack new)
 
-noncomputable def faa {T : Type u} [Nonempty T] [Add T] (l : Loc) (n : T) : ITree E T :=
+noncomputable def faa {T : Type u} [Add T] (l : Loc) (n : T) : ITree E T :=
   modify T (· + n) l
 
 def alloc {T : Type u} (v : T) : ITree E Loc :=
@@ -51,24 +51,27 @@ def alloc {T : Type u} (v : T) : ITree E Loc :=
 def free (l : Loc) : ITree E PUnit.{u+1} :=
   Heap.free l
 
-theorem wpi_load {T : Type u} [Nonempty T] (l : Loc) (v : T) (dq : DFrac)
+theorem wpi_load {T : Type u} (l : Loc) (v : T) (dq : DFrac)
     {Φ : Post GF T} {M : CoPset} :
     lat m iprop(l ↦{dq} v ∗ (l ↦{dq} v -∗ |={M}=> Φ v))
       ⊢ wpi_mask GF Hd m (load (E := E) l) Φ M :=
   wpi_load_at (Hd := Hd) (m := m) T l 0 v dq
 
+omit [Aeneas.Std.FailE -< E] in
 theorem wpi_store {T U : Type u} (l : Loc) (v : T) (w : U)
     {Φ : Post GF PUnit.{u+1}} {M : CoPset} :
     lat m iprop(l ↦ v ∗ (l ↦ w -∗ |={M}=> Φ PUnit.unit))
       ⊢ wpi_mask GF Hd m (store (E := E) l w) Φ M :=
   wpi_store_at (Hd := Hd) (m := m) l (Val.pack v) (Val.pack w)
 
+omit [Aeneas.Std.FailE -< E] in
 theorem wpi_cas_succ {T : Type u} (l : Loc) (old new : T)
     {Φ : Post GF Bool} {M : CoPset} :
     lat m iprop(l ↦ old ∗ (l ↦ new -∗ |={M}=> Φ true))
       ⊢ wpi_mask GF Hd m (cas (E := E) l old new) Φ M :=
   wpi_cas_suc (Hd := Hd) (m := m) l (Val.pack old) (Val.pack new)
 
+omit [Aeneas.Std.FailE -< E] in
 theorem wpi_cas_fail {T : Type u} (l : Loc) (v old new : T) (dq : DFrac) (hne : v ≠ old)
     {Φ : Post GF Bool} {M : CoPset} :
     lat m iprop(l ↦{dq} v ∗ (l ↦{dq} v -∗ |={M}=> Φ false))
@@ -76,6 +79,7 @@ theorem wpi_cas_fail {T : Type u} (l : Loc) (v old new : T) (dq : DFrac) (hne : 
   wpi_cas_fail_of (Hd := Hd) (m := m) l 0 (Val.pack v) (Val.pack old) (Val.pack new) dq
     (fun heq => hne (eq_of_heq ((Sigma.mk.injEq .. ▸ heq).2)))
 
+omit [Aeneas.Std.FailE -< E] in
 theorem wpi_cas_fail_ty {T U : Type u} (l : Loc) (v : U) (old new : T) (dq : DFrac)
     (hne : U ≠ T) {Φ : Post GF Bool} {M : CoPset} :
     lat m iprop(l ↦{dq} v ∗ (l ↦{dq} v -∗ |={M}=> Φ false))
@@ -83,17 +87,19 @@ theorem wpi_cas_fail_ty {T U : Type u} (l : Loc) (v : U) (old new : T) (dq : DFr
   wpi_cas_fail_of (Hd := Hd) (m := m) l 0 (Val.pack v) (Val.pack old) (Val.pack new) dq
     (fun heq => hne (congrArg Sigma.fst heq))
 
-theorem wpi_faa {T : Type u} [Nonempty T] [Add T] (l : Loc) (v n : T)
+theorem wpi_faa {T : Type u} [Add T] (l : Loc) (v n : T)
     {Φ : Post GF T} {M : CoPset} :
     lat m iprop(l ↦ v ∗ (l ↦ (v + n) -∗ |={M}=> Φ v))
       ⊢ wpi_mask GF Hd m (faa (E := E) l n) Φ M :=
   wpi_modify (Hd := Hd) (m := m) T (· + n) l v
 
+omit [Aeneas.Std.FailE -< E] in
 theorem wpi_alloc {T : Type u} (v : T) {Φ : Post GF Loc} {M : CoPset} :
     lat m iprop(∀ l, l ↦ v -∗ |={M}=> Φ l)
       ⊢ wpi_mask GF Hd m (alloc (E := E) v) Φ M :=
   Heap.wpi_alloc (Hd := Hd) (m := m) (Val.pack v)
 
+omit [Aeneas.Std.FailE -< E] in
 theorem wpi_free {T : Type u} (l : Loc) (v : T) {Φ : Post GF PUnit.{u+1}} {M : CoPset} :
     lat m iprop(l ↦ v ∗ |={M}=> Φ PUnit.unit)
       ⊢ wpi_mask GF Hd m (free (E := E) l) Φ M :=
@@ -115,7 +121,7 @@ variable {Hd : Handler E GF} [stateH heapInterp.{0} -<ₕ Hd]
 variable {m : Mode} [stepH GF m -<ₕ Hd]
 
 @[istep_rule]
-theorem load_body_spec {T : Type} [Nonempty T] (l : Loc) (v : T) (dq : DFrac)
+theorem load_body_spec {T : Type} [Aeneas.Std.FailE -< E] (l : Loc) (v : T) (dq : DFrac)
     (M : CoPset) :
     ⦃ l ↦{dq} v ⦄ (Heap.load_body T l) @ Hd ; m ; M
       ⦃ r, ⌜r = v⌝ ∗ l ↦{dq} v ⦄ := by
@@ -186,7 +192,7 @@ theorem cas_fail_body_spec [DecidableEq Val.{0}] {T : Type} (l : Loc) (v old new
 
 /-- `faa` and friends: read the old value, write `f` of it back. -/
 @[istep_rule]
-theorem modify_body_spec {T : Type} [Nonempty T] (f : T → T) (l : Loc) (v : T)
+theorem modify_body_spec {T : Type} [Aeneas.Std.FailE -< E] (f : T → T) (l : Loc) (v : T)
     (M : CoPset) :
     ⦃ l ↦ v ⦄ (Heap.modify_body T f l) @ Hd ; m ; M
       ⦃ r, ⌜r = v⌝ ∗ l ↦ (f v) ⦄ := by
@@ -215,7 +221,7 @@ theorem free_body_spec {T : Type} (l : Loc) (v : T) (M : CoPset) :
 
 /-- Take a read: one more reader. -/
 @[istep_rule]
-theorem readAcquire_body_spec (l : Loc) (n : Nat) (v : Val.{0}) (M : CoPset) :
+theorem readAcquire_body_spec [Aeneas.Std.FailE -< E] (l : Loc) (n : Nat) (v : Val.{0}) (M : CoPset) :
     ⦃ l ↦[AccessState.reading n] v ⦄ (Heap.readAcquire_body l) @ Hd ; m ; M
       ⦃ r, ⌜r = v⌝ ∗ l ↦[AccessState.reading (n + 1)] v ⦄ := by
   refine .trans ?_ (Heap.wpi_readAcquire_body (Hd := Hd) l n v)
@@ -279,7 +285,7 @@ variable (m : Mode) [stepH GF m -<ₕ Hd]
 
 /-- A non-atomic read. Mask `⊤`: it contains a `yield`. -/
 @[istep_rule]
-theorem load_na_spec (l : Loc) (n : Nat) (v : Val.{0}) :
+theorem load_na_spec [Aeneas.Std.FailE -< E] (l : Loc) (n : Nat) (v : Val.{0}) :
     ⦃ l ↦[AccessState.reading n] v ⦄ (Heap.load_na l) @ Hd ; m ; ⊤
       ⦃ r, ⌜r = v⌝ ∗ l ↦[AccessState.reading n] v ⦄ := by
   refine .trans ?_ (Heap.wpi_load_na (Hd := Hd) (m := m) l n v)

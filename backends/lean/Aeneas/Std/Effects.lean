@@ -168,38 +168,49 @@ def Val : Type (u + 1) := (T : Type u) × T
 /-- Pack a value, remembering its type. -/
 abbrev Val.pack {T : Type u} (x : T) : Val.{u} := ⟨T, x⟩
 
-/-- Read a packed value back at an expected type.
+/-- Read a packed value back, given a proof that the cell holds the expected
+type.
 
-`Nonempty` rather than `Inhabited`: the function has to be total, so it must
-return *something* when the cell holds another type, but nothing depends on
-*what*. `Nonempty` is a `Prop`, is implied by `Inhabited`, and follows from any
-witness at all — `⟨⟨t⟩⟩` for a one-field structure — which matters because
-Aeneas generates no `Inhabited` instances for translated types.
+A total `unpack` would have to return *something* when the cell holds another
+type, which costs a `Nonempty T` instance. That is overhead we cannot pay:
+Aeneas generates no `Nonempty` constraints, so an extracted `{T : Type}` cannot
+supply one, and assuming `∀ T, Nonempty T` would be unsound (`Empty`). The heap
+operations guard on the type before reading, so nothing needs the total version:
+the mismatch is either discharged by a proof (here) or reported as a failure
+(`Val.unpackO`).
 
-`noncomputable` because equality of types is not decidable. Neither that nor the
-arbitrary branch is a restriction in practice: only hand-written models touch the
-heap, and the heap operations are *stuck* on a type mismatch, so no rule ever
-reaches it. -/
-noncomputable def Val.unpack (T : Type u) [Nonempty T] (v : Val.{u}) : T :=
+Nothing is assumed here that the heap does not already witness: `Val` is
+`(T : Type u) × T`, so a stored value *is* an inhabitant of its own type.
+
+Computable: the caller has already decided the equality. -/
+def Val.unpackH (T : Type u) (v : Val.{u}) (h : v.1 = T) : T := h ▸ v.2
+
+@[simp] theorem Val.unpackH_pack (T : Type u) (x : T) (h : (Val.pack x).1 = T) :
+    Val.unpackH T (Val.pack x) h = x := rfl
+
+/-- Read a packed value back, or fail. The heap operations guard on the type
+before reading, so `none` is unreachable there -- but expressing the failure in
+the result rather than in a `Nonempty` instance is what removes the constraint
+the extracted code cannot supply. -/
+noncomputable def Val.unpackO (T : Type u) (v : Val.{u}) : Option T :=
   open Classical in
-  if h : v.1 = T then h ▸ v.2 else Classical.choice inferInstance
+  if h : v.1 = T then some (Val.unpackH T v h) else none
 
-/-- Packing and reading back at the same type is the identity. This is the whole
-point of storing the type alongside the value. -/
-@[simp] theorem Val.unpack_pack (T : Type u) [Nonempty T] (x : T) :
-    Val.unpack T (Val.pack x) = x := by
-  simp [Val.unpack]
+@[simp] theorem Val.unpackO_pack (T : Type u) (x : T) :
+    Val.unpackO T (Val.pack x) = some x := by
+  simp [Val.unpackO, Val.unpackH]
+
+@[simp] theorem Val.unpackO_eq_some (T : Type u) (v : Val.{u}) (h : v.1 = T) :
+    Val.unpackO T v = some (Val.unpackH T v h) := by
+  simp only [Val.unpackO, dif_pos h]
 
 /-- The type a `Val` was packed at is recoverable, which is what lets the heap
 operations refuse a mismatched access rather than reinterpret it. -/
 @[simp] theorem Val.fst_pack {T : Type u} (x : T) : (Val.pack x).1 = T := rfl
 
-/-- Needed so that a read from an absent location has something to return. -/
-instance : Inhabited Val.{u} := ⟨Val.pack PUnit.unit⟩
-
 /-- Comparing two `Val`s means comparing their *types* first, and equality of
 types is not decidable. The instance is therefore classical, and `noncomputable`
-like `Val.unpack`.
+like `Val.unpackO`.
 
 The semantics are the intended ones: `⟨T, x⟩ = ⟨U, y⟩` holds exactly when the
 types agree and the values do. A compare-and-swap against a cell holding a

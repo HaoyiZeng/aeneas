@@ -162,8 +162,12 @@ theorem writeAcquireF_eq (l : Loc) :
 theorem readAcquireF_eq (l : Loc) :
     (AeneasIris.Heap.readAcquire_body (E := Aeneas.Std.RustEffect) l :
         ITree Aeneas.Std.RustEffect Val.{0})
-      = AeneasIris.Heap.act' (S := RustHeap.{0}) (readAcquireF l)
-          (AeneasIris.Heap.valAt l) :=
+      = ITree.bind
+          (AeneasIris.Heap.act' (S := RustHeap.{0}) (readAcquireF l)
+            (AeneasIris.Heap.valAt l))
+          (fun o => match o with
+                    | some v => ITree.ret v
+                    | none => AeneasIris.Heap.panic) :=
   rfl
 
 /-- **Write ∥ read is a race.** A thread starting a non-atomic write to a cell

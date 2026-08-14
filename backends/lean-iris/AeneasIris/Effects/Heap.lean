@@ -9,7 +9,7 @@ import Iris.BI.Lib.GenHeap
 namespace AeneasIris.Heap
 
 open Iris BI Aeneas.Data.Coinductive
-open Aeneas.Std (StateE ConcE StepE Loc AccessState Cell Val HMap RustHeap)
+open Aeneas.Std (StateE ConcE StepE FailE Error Loc AccessState Cell Val HMap RustHeap)
 open scoped Aeneas.Std
 open AeneasIris AeneasIris.Conc
 open AeneasIris.Conc (yield)
@@ -81,18 +81,34 @@ section HeapOps
 open Std.PartialMap
 
 variable {E : Effect.{u+1}} [StateE RustHeap.{u} -< E] [ConcE -< E] [StepE -< E]
+variable [FailE.{u+1} -< E]
 
-def valAt (l : Loc) (σ : RustHeap.{u}) : Val.{u} :=
+/-- `fail` as a program, inlined here rather than imported so that the heap does
+not depend on the failure *rules*. -/
+def panic {α : Type _} : ITree E α :=
+  ITree.bind (Effect.trigger FailE.{u+1} (FailE.I.fail Error.panic)) (fun o => PEmpty.elim o)
+
+/-- The value stored at a location, or `none` if the location is absent.
+
+Absence is reported, not papered over with an `Inhabited Val` default. The heap
+operations guard on presence before reading, so `none` is unreachable there --
+but a model that returns junk for a missing location is a model that lets a
+proof about junk look like a proof about a read. Together with `Val.unpackO`
+this makes both ways a read can go wrong -- absent location, wrong type -- come
+out as the same thing: a failure. -/
+def valAt (l : Loc) (σ : RustHeap.{u}) : Option Val.{u} :=
   match get? σ l with
-  | some (_, v) => v
-  | none => default
+  | some (_, v) => some v
+  | none => none
 
 /-- The step-free part of `readAcquire`. See `load_body`. -/
 def readAcquire_body (l : Loc) : ITree E Val.{u} :=
-  act' (S := RustHeap.{u}) (fun σ =>
-    match get? σ l with
-    | some (.reading n, v) => some (insert σ l (.reading (n + 1), v))
-    | _ => none) (valAt l)
+  ITree.bind
+    (act' (S := RustHeap.{u}) (fun σ =>
+      match get? σ l with
+      | some (.reading n, v) => some (insert σ l (.reading (n + 1), v))
+      | _ => none) (valAt l))
+    (fun o => match o with | some v => ITree.ret v | none => panic)
 
 def readAcquire (l : Loc) : ITree E Val.{u} := do
   let _ ← stepP
@@ -142,14 +158,20 @@ def store_na (l : Loc) (v : Val.{u}) : ITree E PUnit.{u+2} := do
   let _ ← yield
   writeRelease l v
 
-/-- The step-free part of `load_at`. -/
-noncomputable def load_body (T : Type u) [Nonempty T] (l : Loc) : ITree E T :=
-  act' (S := RustHeap.{u}) (fun σ =>
-    match get? σ l with
-    | some (.reading _, v) => if v.1 = T then some σ else none
-    | _ => none) (fun σ => Val.unpack T (valAt l σ))
+/-- The step-free part of `load_at`.
 
-noncomputable def load_at (T : Type u) [Nonempty T] (l : Loc) : ITree E T := do
+The guard already refuses a type mismatch, so the `none` branch below is
+unreachable; expressing it as a failure rather than as a `Nonempty` default is
+what lets an extracted `{T : Type}`, which carries no instance, be loaded. -/
+noncomputable def load_body (T : Type u) (l : Loc) : ITree E T :=
+  ITree.bind
+    (act' (S := RustHeap.{u}) (fun σ =>
+      match get? σ l with
+      | some (.reading _, v) => if v.1 = T then some σ else none
+      | _ => none) (fun σ => (valAt l σ).bind (Val.unpackO T)))
+    (fun o => match o with | some x => ITree.ret x | none => panic)
+
+noncomputable def load_at (T : Type u) (l : Loc) : ITree E T := do
   let _ ← stepP
   load_body T l
 
@@ -182,14 +204,17 @@ noncomputable def cas (l : Loc) (old new : Val.{u}) : ITree E Bool := do
   cas_body l old new
 
 /-- The step-free part of `modify`. See `load_body`. -/
-noncomputable def modify_body (T : Type u) [Nonempty T] (f : T → T) (l : Loc) : ITree E T :=
-  act' (S := RustHeap.{u}) (fun σ =>
-    match get? σ l with
-    | some (.reading 0, v) =>
-        if v.1 = T then some (insert σ l (.reading 0, Val.pack (f (Val.unpack T v)))) else none
-    | _ => none) (fun σ => Val.unpack T (valAt l σ))
+noncomputable def modify_body (T : Type u) (f : T → T) (l : Loc) : ITree E T :=
+  ITree.bind
+    (act' (S := RustHeap.{u}) (fun σ =>
+      match get? σ l with
+      | some (.reading 0, v) =>
+          if h : v.1 = T then
+            some (insert σ l (.reading 0, Val.pack (f (Val.unpackH T v h)))) else none
+      | _ => none) (fun σ => (valAt l σ).bind (Val.unpackO T)))
+    (fun o => match o with | some x => ITree.ret x | none => panic)
 
-noncomputable def modify (T : Type u) [Nonempty T] (f : T → T) (l : Loc) : ITree E T := do
+noncomputable def modify (T : Type u) (f : T → T) (l : Loc) : ITree E T := do
   let _ ← stepP
   modify_body T f l
 
@@ -307,7 +332,7 @@ variable {Hd : Handler E GF} [stateH heapInterp.{u} -<ₕ Hd]
 variable {m : Mode} [stepH GF m -<ₕ Hd]
 
 private theorem valAt_of_get {σ : RustHeap.{u}} {l : Loc} {st : AccessState} {v : Val.{u}}
-    (h : Std.get? σ l = some (st, v)) : valAt l σ = v := by
+    (h : Std.get? σ l = some (st, v)) : valAt l σ = some v := by
   simp only [valAt, h]
 
 private theorem wpi_cell_ro {R : Type _} (l : Loc) (st : AccessState) (v : Val.{u}) (dq : DFrac)
@@ -360,17 +385,34 @@ private theorem wpi_cell_upd {R : Type _} (l : Loc) (st st' : AccessState) (v w 
   simp only [hk σ Hget]
   iexact HΦ
 
-/-- The rule for `load`'s step-free part. -/
-theorem wpi_load_body (T : Type u) [Nonempty T] (l : Loc) (n : Nat) (v : T) (dq : DFrac)
+/-- The rule for `load`'s step-free part.
+
+`load_body` now binds the guarded read to a match on `Option T`, so the proof
+goes through `wpi_bind`: the read yields `some v` under the guard, and the match
+then reduces to `ret v`. The `none` branch is unreachable and never appears. -/
+theorem wpi_load_body [FailE.{u+1} -< E] (T : Type u) (l : Loc) (n : Nat) (v : T) (dq : DFrac)
     {Φ : Post GF T} {M : CoPset} :
     iprop(l ↦[AccessState.reading n]{dq} Val.pack v ∗
       (l ↦[AccessState.reading n]{dq} Val.pack v -∗ |={M}=> Φ v))
-      ⊢ wpi_mask GF Hd m (load_body T l) Φ M :=
-  wpi_cell_ro l _ (Val.pack v) dq _ (fun σ => Val.unpack T (valAt l σ)) v Φ M
-    (fun _ h => by simp only [h]; simp)
-    (fun _ h => by simp only [valAt_of_get h, Val.unpack_pack])
+      ⊢ wpi_mask GF Hd m (load_body T l) Φ M := by
+  simp only [load_body]
+  refine .trans ?_ (wpi_bind (H := Hd) _ _ Φ M)
+  refine .trans ?ent (wpi_cell_ro l (AccessState.reading n) (Val.pack v) dq _
+    (fun σ => (valAt l σ).bind (Val.unpackO T)) (some v) _ M ?hf ?hk)
+  case hf => intro _ h; simp only [h]; simp
+  case hk => intro _ h; simp only [valAt_of_get h, Option.bind_some, Val.unpackO_pack]
+  case ent =>
+  iintro ⟨Hl, HΦ⟩
+  isplitl [Hl]
+  · iexact Hl
+  · iintro Hl'
+    ihave HΦ' := HΦ $$ Hl'
+    imod HΦ'
+    imodintro
+    iapply wpi_ret
+    iexact HΦ'
 
-theorem wpi_load_at (T : Type u) [Nonempty T] (l : Loc) (n : Nat) (v : T) (dq : DFrac)
+theorem wpi_load_at [FailE.{u+1} -< E] (T : Type u) (l : Loc) (n : Nat) (v : T) (dq : DFrac)
     {Φ : Post GF T} {M : CoPset} :
     lat m iprop(l ↦[AccessState.reading n]{dq} Val.pack v ∗
       (l ↦[AccessState.reading n]{dq} Val.pack v -∗ |={M}=> Φ v))
@@ -392,14 +434,29 @@ theorem wpi_store_at (l : Loc) (v w : Val.{u}) {Φ : Post GF PUnit.{w+1}} {M : C
   wpi_stepThen _ _ _ (wpi_store_body l v w)
 
 /-- The rule for `readAcquire`'s step-free part. No modality. -/
-theorem wpi_readAcquire_body (l : Loc) (n : Nat) (v : Val.{u}) {Φ : Post GF Val.{u}} {M : CoPset} :
+theorem wpi_readAcquire_body [FailE.{u+1} -< E] (l : Loc) (n : Nat) (v : Val.{u})
+    {Φ : Post GF Val.{u}} {M : CoPset} :
     iprop(l ↦[AccessState.reading n] v ∗
       (l ↦[AccessState.reading (n + 1)] v -∗ |={M}=> Φ v))
-      ⊢ wpi_mask GF Hd m (readAcquire_body l) Φ M :=
-  wpi_cell_upd l _ _ v v _ (valAt l) v Φ M
-    (fun _ h => by simp only [h]) (fun _ h => valAt_of_get h)
+      ⊢ wpi_mask GF Hd m (readAcquire_body l) Φ M := by
+  simp only [readAcquire_body]
+  refine .trans ?ent (wpi_bind (H := Hd) _ _ Φ M)
+  refine .trans ?ent' (wpi_cell_upd l (AccessState.reading n) (AccessState.reading (n + 1))
+    v v _ (valAt l) (some v) _ M ?hf ?hk)
+  case hf => intro _ h; simp only [h]
+  case hk => intro _ h; exact valAt_of_get h
+  case ent' =>
+  iintro ⟨Hl, HΦ⟩
+  isplitl [Hl]
+  · iexact Hl
+  · iintro Hl'
+    ihave HΦ' := HΦ $$ Hl'
+    imod HΦ'
+    imodintro
+    iapply wpi_ret
+    iexact HΦ'
 
-theorem wpi_readAcquire (l : Loc) (n : Nat) (v : Val.{u}) {Φ : Post GF Val.{u}} {M : CoPset} :
+theorem wpi_readAcquire [FailE.{u+1} -< E] (l : Loc) (n : Nat) (v : Val.{u}) {Φ : Post GF Val.{u}} {M : CoPset} :
     lat m iprop(l ↦[AccessState.reading n] v ∗
       (l ↦[AccessState.reading (n + 1)] v -∗ |={M}=> Φ v))
       ⊢ wpi_mask GF Hd m (readAcquire l) Φ M :=
@@ -451,7 +508,7 @@ section NonAtomic
 
 variable [ConcE -< E] [ConcH GF -<ₕ Hd]
 
-theorem wpi_load_na (l : Loc) (n : Nat) (v : Val.{u}) {Φ : Post GF Val.{u}} :
+theorem wpi_load_na [FailE.{u+1} -< E] (l : Loc) (n : Nat) (v : Val.{u}) {Φ : Post GF Val.{u}} :
     lat m iprop(l ↦[AccessState.reading n] v ∗
       (l ↦[AccessState.reading n] v -∗ |={⊤}=> Φ v))
       ⊢ wpi_mask GF Hd m (load_na l) Φ ⊤ := by
@@ -538,17 +595,30 @@ theorem wpi_cas_fail_of [DecidableEq Val.{u}] (l : Loc) (n : Nat) (v old new : V
   wpi_stepThen _ _ _ (wpi_cas_fail_body l n v old new dq hne)
 
 /-- The rule for `modify`'s step-free part. No modality. -/
-theorem wpi_modify_body (T : Type u) [Nonempty T] (f : T → T) (l : Loc) (v : T)
+theorem wpi_modify_body [FailE.{u+1} -< E] (T : Type u) (f : T → T) (l : Loc) (v : T)
     {Φ : Post GF T} {M : CoPset} :
     iprop(l ↦[AccessState.reading 0] Val.pack v ∗
       (l ↦[AccessState.reading 0] Val.pack (f v) -∗ |={M}=> Φ v))
-      ⊢ wpi_mask GF Hd m (modify_body T f l) Φ M :=
-  wpi_cell_upd l _ _ (Val.pack v) (Val.pack (f v)) _
-    (fun σ => Val.unpack T (valAt l σ)) v Φ M
-    (fun _ h => by simp only [h]; simp [Val.unpack_pack])
-    (fun _ h => by simp only [valAt_of_get h, Val.unpack_pack])
+      ⊢ wpi_mask GF Hd m (modify_body T f l) Φ M := by
+  simp only [modify_body]
+  refine .trans ?ent (wpi_bind (H := Hd) _ _ Φ M)
+  refine .trans ?ent' (wpi_cell_upd l (AccessState.reading 0) (AccessState.reading 0)
+    (Val.pack v) (Val.pack (f v)) _ (fun σ => (valAt l σ).bind (Val.unpackO T)) (some v) _ M
+    ?hf ?hk)
+  case hf => intro _ h; simp only [h]; simp [Val.unpackH]
+  case hk => intro _ h; simp only [valAt_of_get h, Option.bind_some, Val.unpackO_pack]
+  case ent' =>
+  iintro ⟨Hl, HΦ⟩
+  isplitl [Hl]
+  · iexact Hl
+  · iintro Hl'
+    ihave HΦ' := HΦ $$ Hl'
+    imod HΦ'
+    imodintro
+    iapply wpi_ret
+    iexact HΦ'
 
-theorem wpi_modify (T : Type u) [Nonempty T] (f : T → T) (l : Loc) (v : T)
+theorem wpi_modify [FailE.{u+1} -< E] (T : Type u) (f : T → T) (l : Loc) (v : T)
     {Φ : Post GF T} {M : CoPset} :
     lat m iprop(l ↦[AccessState.reading 0] Val.pack v ∗
       (l ↦[AccessState.reading 0] Val.pack (f v) -∗ |={M}=> Φ v))

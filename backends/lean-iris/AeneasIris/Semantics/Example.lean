@@ -327,9 +327,12 @@ private noncomputable def loadF (T : Type) (l : Loc) : RustHeap.{0} → Option R
     | some (AccessState.reading _, v) => if v.1 = T then some σ else none
     | _ => none
 
-private theorem load_body_eq (T : Type) [Nonempty T] (l : Loc) :
+private theorem load_body_eq (T : Type) (l : Loc) :
     Heap.load_body (E := RustEffect) T l
-      = Heap.act' (loadF T l) (fun σ => Val.unpack T (Heap.valAt l σ)) := rfl
+      = ITree.bind (Heap.act' (loadF T l) (fun σ => (Heap.valAt l σ).bind (Val.unpackO T)))
+          (fun o => match o with
+                    | some x => ITree.ret x
+                    | none => Heap.panic) := rfl
 
 /-! ### The concrete heaps -/
 
@@ -351,8 +354,8 @@ private theorem storeF_heapA :
 private theorem loadF_heapB : loadF Nat loc0 heapB = some heapB := by
   simp only [loadF, heapB, Std.get?_insert_eq rfl, if_true]
 
-private theorem unpack_heapB : Val.unpack Nat (Heap.valAt loc0 heapB) = 42 := by
-  simp only [Heap.valAt, heapB, Std.get?_insert_eq rfl, Val.unpack_pack]
+private theorem unpack_heapB : (Heap.valAt loc0 heapB).bind (Val.unpackO Nat) = some 42 := by
+  simp only [Heap.valAt, heapB, Std.get?_insert_eq rfl, Option.bind_some, Val.unpackO_pack]
 
 /-! ### `MayReturn prog 42`
 
@@ -379,9 +382,19 @@ theorem prog_mayReturn : MayReturn prog 42 := by
     fun _ => stepThen_eq _
   have e6 : ∀ l : Loc, Heap.load_body (E := RustEffect) Nat l
       = Result.vis (modifyEv (loadF Nat l))
-          (fun s => Result.ok (Val.unpack Nat (Heap.valAt l s))) :=
-    fun _ => act'_eq _ _
-  refine ⟨⟨[Thread.alive (Result.ok (Val.unpack Nat (Heap.valAt loc0 heapB)))], 0, heapB⟩,
+          (fun s => match (Heap.valAt l s).bind (Val.unpackO Nat) with
+                    | some x => Result.ok x
+                    | none => Heap.panic) :=
+    fun _ => by
+      rw [load_body_eq, act'_eq]
+      simp only [Aeneas.Std.Result.vis, Aeneas.Std.Result.ok,
+        Aeneas.Data.Coinductive.itree_vis_bind, Aeneas.Data.Coinductive.itree_ret_bind]
+      apply congrArg
+      funext s
+      cases (Heap.valAt _ s).bind (Val.unpackO Nat) <;> rfl
+  refine ⟨⟨[Thread.alive (match (Heap.valAt loc0 heapB).bind (Val.unpackO Nat) with
+              | some x => Result.ok x
+              | none => Heap.panic)], 0, heapB⟩,
     ?_, rfl, ?_⟩
   · exact .tail (tick1 e1)
       (.tail (heap1 e2 allocF_empty)
@@ -389,7 +402,9 @@ theorem prog_mayReturn : MayReturn prog 42 := by
           (.tail (heap1 (e4 loc0) storeF_heapA)
             (.tail (tick1 (e5 loc0))
               (.tail (heap1 (e6 loc0) loadF_heapB) (.refl _))))))
-  · show some (Result.ok (Val.unpack Nat (Heap.valAt loc0 heapB))) = some (Result.ok 42)
+  · show some (match (Heap.valAt loc0 heapB).bind (Val.unpackO Nat) with
+               | some x => Result.ok x
+               | none => Heap.panic) = some (Result.ok 42)
     rw [unpack_heapB]
 
 end Peeling

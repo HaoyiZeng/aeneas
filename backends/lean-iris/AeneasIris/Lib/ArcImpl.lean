@@ -36,8 +36,9 @@ deriving DecidableEq
 section Code
 
 variable {E : Effect.{1}} [StateE RustHeap.{0} -< E] [StepE.{1} -< E]
+variable [Aeneas.Std.FailE.{1} -< E]
 variable [Aeneas.Std.ConcE.{1} -< E]
-variable {T : Type} [Nonempty T]
+variable {T : Type}
 
 noncomputable def new (x : T) : ITree E (Handle T) := do
   let s ← alloc (1 : Int)
@@ -87,15 +88,14 @@ noncomputable def weak_drop (w : WeakHandle T) : ITree E Unit :=
       else
         return ()
 
-/-- The retry is real: the count may change between the load and the
-compare-and-swap, so both are interference points. -/
+/-- No `yield`: this is a CAS retry, not a wait. -/
 noncomputable def try_upgrade (a : Handle T) : ITree E (Option (Handle T)) :=
   ITree.iter (fun _ => do
-    let n : Int ← AtomicHeapAPI.load a.strong
+    let n : Int ← load a.strong
     if n = 0 then
       return .inr none
     else
-      let ok ← AtomicHeapAPI.cas a.strong n (n + 1)
+      let ok ← cas a.strong n (n + 1)
       if ok then return .inr (some a) else return .inl ()) ()
 
 noncomputable def weak_upgrade (w : WeakHandle T) : ITree E (Option (Handle T)) :=
@@ -722,10 +722,11 @@ open AeneasIris.AtomicWpi
 
 variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF] [HeapGS.{0} GF]
 variable {E : Effect.{1}} [StateE RustHeap.{0} -< E] [StepE.{1} -< E]
+variable [Aeneas.Std.FailE.{1} -< E]
 variable [Aeneas.Std.ConcE.{1} -< E]
 variable {Hd : Handler E GF} [stateH heapInterp -<ₕ Hd]
 variable {m : Mode} [stepH GF m -<ₕ Hd]
-variable {T : Type} [Nonempty T] [ArcG GF T]
+variable {T : Type} [ArcG GF T]
 
 theorem new_spec (v : T) (M : CoPset) :
     ⦃ emp ⦄ (new (E := E) v) @ Hd ; m ; M
@@ -1376,7 +1377,7 @@ private theorem wpi_aupd_choose {A B V : Type}
       iapply Hret $$ HΨ
   · iapply Hbody $$ Hα
 
-theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd]
+theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd]
     (γ : GName) (w : WeakHandle T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
@@ -1398,8 +1399,6 @@ theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd]
     iunfold ITree.iter
     ibind
     ibind
-    simp only [AtomicHeapAPI.load]
-    iapply Conc.wpi_sync
     iapply (wpi_aupd_choose (m := Mode.part) (hsub := by aupd_mask)) $$ HAU
     iintro %pk HAuth
     obtain ⟨n, k⟩ := pk
@@ -1485,8 +1484,6 @@ theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd]
         · iintro HAU
           simp only [if_neg (show ¬(((n' + 1 : Nat) : Int) = 0) from by grind)]
           ibind
-          simp only [AtomicHeapAPI.cas]
-          iapply Conc.wpi_sync
           iapply (wpi_aupd_choose (m := Mode.part) (hsub := by aupd_mask)) $$ HAU
           iintro %pk2 HAuth2
           obtain ⟨n₂, k₂⟩ := pk2
@@ -1803,7 +1800,7 @@ theorem weak_drop_spec (γ : GName) (w : WeakHandle T) (v : T) :
           simp only [AtomicWpi.wandM_none]
           iapply HΨ $$ %()
 
-omit [Nonempty T] [ArcG GF T] in
+omit [ArcG GF T] in
 theorem dangling_clone_spec (w : WeakHandle T) (M : CoPset) :
     ⦃ isDanglingWeak (GF := GF) w ⦄ (weak_clone (E := E) w) @ Hd ; m ; M
     ⦃ r, ⌜r = w⌝ ∗ isDanglingWeak w ⦄ := by
@@ -1815,7 +1812,7 @@ theorem dangling_clone_spec (w : WeakHandle T) (M : CoPset) :
   iapply wpi_ret
   itrivial
 
-omit [Nonempty T] [ArcG GF T] in
+omit [ArcG GF T] in
 theorem dangling_upgrade_spec (w : WeakHandle T) (M : CoPset) :
     ⦃ isDanglingWeak (GF := GF) w ⦄ (weak_upgrade (E := E) w) @ Hd ; m ; M
     ⦃ r, ⌜r = none⌝ ⦄ := by
@@ -1827,7 +1824,7 @@ theorem dangling_upgrade_spec (w : WeakHandle T) (M : CoPset) :
   iapply wpi_ret
   itrivial
 
-omit [Nonempty T] [ArcG GF T] in
+omit [ArcG GF T] in
 theorem dangling_strong_count_spec (w : WeakHandle T) (M : CoPset) :
     ⦃ isDanglingWeak (GF := GF) w ⦄ (weak_strong_count (E := E) w) @ Hd ; m ; M
     ⦃ r, ⌜r = 0⌝ ⦄ := by
@@ -1839,7 +1836,7 @@ theorem dangling_strong_count_spec (w : WeakHandle T) (M : CoPset) :
   iapply wpi_ret
   itrivial
 
-omit [Nonempty T] [ArcG GF T] in
+omit [ArcG GF T] in
 theorem dangling_drop_spec (w : WeakHandle T) (M : CoPset) :
     ⦃ isDanglingWeak (GF := GF) w ⦄ (weak_drop (E := E) w) @ Hd ; m ; M
     ⦃ _r, emp ⦄ := by
@@ -1851,7 +1848,7 @@ theorem dangling_drop_spec (w : WeakHandle T) (M : CoPset) :
   iapply wpi_ret
   itrivial
 
-noncomputable instance instArcAPI [stepH GF Mode.part -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd] :
+noncomputable instance instArcAPI [stepH GF Mode.part -<ₕ Hd] :
     ArcAPI GF Hd m T where
   Arc := Handle
   Weak := WeakHandle

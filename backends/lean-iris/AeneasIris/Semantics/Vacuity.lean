@@ -113,9 +113,12 @@ noncomputable def loadF (T : Type) (l : Loc) : RustHeap.{0} → Option RustHeap.
     | some (AccessState.reading _, v) => if v.1 = T then some σ else none
     | _ => none
 
-theorem loadF_eq (T : Type) [Nonempty T] (l : Loc) :
+theorem loadF_eq (T : Type) (l : Loc) :
     Heap.load_body (E := RustEffect) T l
-      = Heap.act' (loadF T l) (fun σ => Val.unpack T (Heap.valAt l σ)) := rfl
+      = ITree.bind (Heap.act' (loadF T l) (fun σ => (Heap.valAt l σ).bind (Val.unpackO T)))
+          (fun o => match o with
+                    | some x => ITree.ret x
+                    | none => Heap.panic (E := RustEffect)) := rfl
 
 /-- The two monads' `bind`s agree; kept because it is `rfl` and documents that
 `Result`'s bind is `ITree`'s. -/

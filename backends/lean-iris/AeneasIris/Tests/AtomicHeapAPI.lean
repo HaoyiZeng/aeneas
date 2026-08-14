@@ -15,7 +15,7 @@ section Examples
 
 variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF] [G : HeapGS.{0} GF]
 variable {E : Effect.{1}} [StateE RustHeap.{0} -< E] [StepE.{1} -< E]
-variable [Aeneas.Std.ConcE.{1} -< E]
+variable [Aeneas.Std.ConcE.{1} -< E] [Aeneas.Std.FailE.{1} -< E]
 variable {Hd : Handler E GF} [stateH heapInterp.{0} -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd]
 variable {m : Mode} [AeneasIris.Step.stepH GF m -<ₕ Hd]
 

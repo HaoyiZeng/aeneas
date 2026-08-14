@@ -40,19 +40,19 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
   ReadGuard : Type → Type
   WriteGuard : Type → Type
 
-  new {T : Type} [Nonempty T] : T → ITree E (RwLock T)
-  drop {T : Type} [Nonempty T] : RwLock T → ITree E Unit
-  try_read {T : Type} [Nonempty T] :
+  new {T : Type} : T → ITree E (RwLock T)
+  drop {T : Type} : RwLock T → ITree E Unit
+  try_read {T : Type} :
     RwLock T → ITree E (Option (ReadGuard T × (ReadGuard T → ITree E Unit)))
-  try_write {T : Type} [Nonempty T] :
+  try_write {T : Type} :
     RwLock T → ITree E (Option (WriteGuard T × (WriteGuard T → ITree E Unit)))
-  read {T : Type} [Nonempty T] :
+  read {T : Type} :
     RwLock T → ITree E (ReadGuard T × (ReadGuard T → ITree E Unit))
-  write {T : Type} [Nonempty T] :
+  write {T : Type} :
     RwLock T → ITree E (WriteGuard T × (WriteGuard T → ITree E Unit))
-  read_deref {T : Type} [Nonempty T] : ReadGuard T → ITree E T
-  write_deref {T : Type} [Nonempty T] : WriteGuard T → ITree E T
-  write_deref_mut {T : Type} [Nonempty T] : WriteGuard T →
+  read_deref {T : Type} : ReadGuard T → ITree E T
+  write_deref {T : Type} : WriteGuard T → ITree E T
+  write_deref_mut {T : Type} : WriteGuard T →
     ITree E (T × (T → ITree E (WriteGuard T)) × (WriteGuard T → ITree E (WriteGuard T)))
 
   /-- The lock itself, at abstract state `s` holding `v`. -/
@@ -84,13 +84,13 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
   writeGuard_state {T : Type} γ (lk : RwLock T) s (g : WriteGuard T) v v' :
     iprop(isRwLock γ lk s v ∗ writeGuard γ g v') ⊢@{IProp GF} iprop(⌜s = .write⌝)
 
-  new_spec {T : Type} [Nonempty T] (v : T) (M : CoPset) :
+  new_spec {T : Type} (v : T) (M : CoPset) :
     ⦃ emp ⦄ (new v) @ Hd ; m ; M ⦃ lk, ∃ γ, isRwLock γ lk .free v ⦄
 
-  drop_spec {T : Type} [Nonempty T] (γ : GName) (lk : RwLock T) (v : T) (M : CoPset) :
+  drop_spec {T : Type} (γ : GName) (lk : RwLock T) (v : T) (M : CoPset) :
     ⦃ isRwLock γ lk .free v ⦄ (drop lk) @ Hd ; m ; M ⦃ r, ⌜r = ()⌝ ⦄
 
-  try_write_spec {T : Type} [Nonempty T] (γ : GName) (lk : RwLock T) :
+  try_write_spec {T : Type} (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd m (try_write lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk (if s = .free then .write else s) v
         | g rel, RET (if s = .free then some (g, rel) else none)
@@ -103,7 +103,7 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
 
   /-- Releasing a read guard retries its decrement, so its closure is stated at
   `.part` even though acquiring did not have to block. -/
-  try_read_spec {T : Type} [Nonempty T] (γ : GName) (lk : RwLock T) :
+  try_read_spec {T : Type} (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd m (try_read lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk (match s with
                          | .free => .read 0
@@ -120,7 +120,7 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
 
   /-- Blocking acquires spin, so they are only partially correct: a thread that
   never wins the race owes nothing. -/
-  write_spec {T : Type} [Nonempty T] (γ : GName) (lk : RwLock T) :
+  write_spec {T : Type} (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd .part (write lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk .write v ∗ ⌜s = .free⌝
         | g rel, RET (g, rel)
@@ -129,7 +129,7 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
                ⟪ ∀ v₀, isRwLock γ lk .write v₀ ⟫ Hd .part (rel g) @ (∅ : CoPset)
                    ⟪ isRwLock γ lk .free v₁ | RET () ⟫) ⟫
 
-  read_spec {T : Type} [Nonempty T] (γ : GName) (lk : RwLock T) :
+  read_spec {T : Type} (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd .part (read lk) @ (∅ : CoPset)
         ⟪ (isRwLock γ lk (.read 0) v ∗ ⌜s = .free⌝) ∨
           (∃ k : Nat, isRwLock γ lk (.read (k + 1)) v ∗ ⌜s = .read k⌝)
@@ -141,17 +141,17 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
                      (∃ n : Nat, isRwLock γ lk (.read n) v ∗ ⌜s' = .read (n + 1)⌝)
                    | RET () ⟫) ⟫
 
-  write_deref_spec {T : Type} [Nonempty T] (γ : GName) (g : WriteGuard T) (v : T) (M : CoPset) :
+  write_deref_spec {T : Type} (γ : GName) (g : WriteGuard T) (v : T) (M : CoPset) :
     ⦃ writeGuard γ g v ⦄ (write_deref g) @ Hd ; m ; M
     ⦃ r, ⌜r = v⌝ ∗ writeGuard γ g v ⦄
 
-  read_deref_spec {T : Type} [Nonempty T] (γ : GName) (g : ReadGuard T) (q : Qp) (v : T) (M : CoPset) :
+  read_deref_spec {T : Type} (γ : GName) (g : ReadGuard T) (q : Qp) (v : T) (M : CoPset) :
     ⦃ readGuardFrac γ g q v ⦄ (read_deref g) @ Hd ; m ; M
     ⦃ r, ⌜r = v⌝ ∗ readGuardFrac γ g q v ⦄
 
   /-- The inner `set` obligation stays a `wpi_mask`: it is a nested triple, and
   `⦃ ⦄` does not nest inside an `iprop`. -/
-  write_deref_mut_spec {T : Type} [Nonempty T] (γ : GName) (g : WriteGuard T) (v : T) (M : CoPset) :
+  write_deref_mut_spec {T : Type} (γ : GName) (g : WriteGuard T) (v : T) (M : CoPset) :
     ⦃ writeGuard γ g v ⦄ (write_deref_mut g) @ Hd ; m ; M
     ⦃ r, ∃ set back, ⌜r = (v, set, back)⌝ ∗
         writeGuard γ g v ∗

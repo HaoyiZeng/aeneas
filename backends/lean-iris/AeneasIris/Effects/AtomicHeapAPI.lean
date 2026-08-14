@@ -32,7 +32,7 @@ section
 variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF]
 variable [G : HeapGS.{0} GF]
 variable {E : Effect.{1}} [StateE RustHeap.{0} -< E] [StepE.{1} -< E]
-variable [Aeneas.Std.ConcE.{1} -< E]
+variable [Aeneas.Std.ConcE.{1} -< E] [Aeneas.Std.FailE.{1} -< E]
 variable {Hd : Handler E GF} [stateH heapInterp.{0} -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd]
 variable {m : Mode} [AeneasIris.Step.stepH GF m -<ₕ Hd]
 
@@ -41,7 +41,7 @@ private theorem top_sdiff_empty :
 
 /-! ## The operations -/
 
-noncomputable def load {T : Type} [Nonempty T] (l : Loc) : ITree E T :=
+noncomputable def load {T : Type} (l : Loc) : ITree E T :=
   Conc.sync (HeapAPI.load (E := E) l)
 
 noncomputable def store {T : Type} (l : Loc) (v : T) : ITree E PUnit.{1} :=
@@ -50,7 +50,7 @@ noncomputable def store {T : Type} (l : Loc) (v : T) : ITree E PUnit.{1} :=
 noncomputable def cas {T : Type} (l : Loc) (old new : T) : ITree E Bool :=
   Conc.sync (HeapAPI.cas (E := E) l old new)
 
-noncomputable def faa {T : Type} [Nonempty T] [Add T] (l : Loc) (n : T) : ITree E T :=
+noncomputable def faa {T : Type} [Add T] (l : Loc) (n : T) : ITree E T :=
   Conc.sync (HeapAPI.faa (E := E) l n)
 
 /-- Deallocation synchronises: whoever frees must see every access made through
@@ -71,7 +71,7 @@ sampled *after* any interference, which is exactly the guarantee a client with
 the location in an invariant needs.
 -/
 
-theorem load_spec_multishot {T : Type} [Nonempty T] (l : Loc) (dq : DFrac) :
+theorem load_spec_multishot {T : Type} (l : Loc) (dq : DFrac) :
     ⊢ ⟪ ∀ v, l ↦{dq} (v : T) ⟫
         Hd m (load (E := E) (T := T) l) @ (∅ : CoPset)
       ⟪ l ↦{dq} v | r, RET r ; ⌜r = v⌝ ⟫ := by
@@ -98,7 +98,7 @@ ordinary triple could not provide.
 -/
 
 @[istep_rule]
-theorem load_triple {T : Type} [Nonempty T] (l : Loc) (v : T) (dq : DFrac) :
+theorem load_triple {T : Type} (l : Loc) (v : T) (dq : DFrac) :
     ⦃ l ↦{dq} v ⦄ (load (E := E) (T := T) l) @ Hd ; m ; ⊤
       ⦃ r, ⌜r = v⌝ ∗ l ↦{dq} v ⦄ := by
   iintro Hl
@@ -110,7 +110,7 @@ theorem load_triple {T : Type} [Nonempty T] (l : Loc) (v : T) (dq : DFrac) :
 
 /-- The same guarantee as `load_spec_multishot`, stated one-shot. -/
 @[istep_rule atomic]
-theorem load_spec {T : Type} [Nonempty T] (l : Loc) (dq : DFrac) :
+theorem load_spec {T : Type} (l : Loc) (dq : DFrac) :
     ⟪ ∀ v, l ↦{dq} (v : T) ⟫ Hd m (load (E := E) (T := T) l) @ (∅ : CoPset)
       ⟪ l ↦{dq} v ⟫ ⦃ RET v ⦄ := by
   unfold IASpec
@@ -125,6 +125,7 @@ theorem load_spec {T : Type} [Nonempty T] (l : Loc) (dq : DFrac) :
   exact ()
   itrivial
 
+omit [Aeneas.Std.FailE -< E] in
 /-- Writing: the caller hands over the cell at whatever value it holds. -/
 @[istep_rule atomic]
 theorem store_spec {T U : Type} (l : Loc) (w : U) :
@@ -142,6 +143,7 @@ theorem store_spec {T U : Type} (l : Loc) (w : U) :
   exact ()
   itrivial
 
+omit [Aeneas.Std.FailE -< E] in
 @[istep_rule]
 theorem store_triple {T U : Type} (l : Loc) (v : T) (w : U) :
     ⦃ l ↦ v ⦄ (store (E := E) l w) @ Hd ; m ; ⊤ ⦃ _r, l ↦ w ⦄ := by
@@ -152,7 +154,7 @@ theorem store_triple {T U : Type} (l : Loc) (v : T) (w : U) :
 
 /-- Read-modify-write: the old value comes back, the new one is `+ n`. -/
 @[istep_rule atomic]
-theorem faa_spec {T : Type} [Nonempty T] [Add T] (l : Loc) (n : T) :
+theorem faa_spec {T : Type} [Add T] (l : Loc) (n : T) :
     ⟪ ∀ v, l ↦ (v : T) ⟫ Hd m (faa (E := E) l n) @ (∅ : CoPset)
       ⟪ l ↦ (v + n) ⟫ ⦃ RET v ⦄ := by
   unfold IASpec
@@ -168,7 +170,7 @@ theorem faa_spec {T : Type} [Nonempty T] [Add T] (l : Loc) (n : T) :
   itrivial
 
 @[istep_rule]
-theorem faa_triple {T : Type} [Nonempty T] [Add T] (l : Loc) (v n : T) :
+theorem faa_triple {T : Type} [Add T] (l : Loc) (v n : T) :
     ⦃ l ↦ v ⦄ (faa (E := E) l n) @ Hd ; m ; ⊤ ⦃ r, ⌜r = v⌝ ∗ l ↦ (v + n) ⦄ := by
   iintro Hl
   simp only [faa]
@@ -177,6 +179,7 @@ theorem faa_triple {T : Type} [Nonempty T] [Add T] (l : Loc) (v n : T) :
   · itrivial
   · iexact Hl
 
+omit [Aeneas.Std.FailE -< E] in
 @[istep_rule atomic]
 theorem free_spec {T : Type} (l : Loc) :
     ⟪ ∀ v, l ↦ (v : T) ⟫ Hd m (free (E := E) l) @ (∅ : CoPset)
@@ -191,9 +194,10 @@ theorem free_spec {T : Type} (l : Loc) :
   istep
   iapply Hclose $$ %() []
   · first | exact () | itrivial
-  · first | exact () | itrivial
+  · exact ()
   · first | exact () | itrivial
 
+omit [Aeneas.Std.FailE -< E] in
 @[istep_rule]
 theorem free_triple {T : Type} (l : Loc) (v : T) :
     ⦃ l ↦ v ⦄ (free (E := E) l) @ Hd ; m ; ⊤ ⦃ _r, emp ⦄ := by
@@ -216,6 +220,7 @@ representation into a statement its callers have to read. -/
 theorem pack_inj {T : Type} {a b : T} : Val.pack a = Val.pack b ↔ a = b :=
   ⟨fun h => eq_of_heq (Sigma.mk.inj h).2, fun h => by rw [h]⟩
 
+omit [Aeneas.Std.FailE -< E] in
 @[istep_rule atomic]
 theorem cas_spec [DecidableEq Val.{0}] {T : Type} [DecidableEq T]
     (l : Loc) (old new : T) :
@@ -242,6 +247,7 @@ theorem cas_spec [DecidableEq Val.{0}] {T : Type} [DecidableEq T]
       itrivial
     · exact fun hp => h (pack_inj.mp hp)
 
+omit [Aeneas.Std.FailE -< E] in
 @[istep_rule]
 theorem cas_succ_triple [DecidableEq Val.{0}] {T : Type} (l : Loc) (old new : T) :
     ⦃ l ↦ old ⦄ (cas (E := E) l old new) @ Hd ; m ; ⊤
@@ -253,6 +259,7 @@ theorem cas_succ_triple [DecidableEq Val.{0}] {T : Type} (l : Loc) (old new : T)
   · itrivial
   · iexact Hl
 
+omit [Aeneas.Std.FailE -< E] in
 @[istep_rule]
 theorem cas_fail_triple [DecidableEq Val.{0}] {T : Type} (l : Loc) (v old new : T)
     (dq : DFrac) (hne : Val.pack v ≠ Val.pack old) :
