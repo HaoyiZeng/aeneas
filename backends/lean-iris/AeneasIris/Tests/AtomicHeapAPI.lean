@@ -37,30 +37,33 @@ example (l : Loc) :
   · iexact Hb
 
 /-- Shared ownership: `l` lives in an invariant, so another thread may write to it
-at any point.  The one-shot triple hands the caller an update; `iinv_atomic` opens
-the invariant into it, and the closer `Hcl` and the mask witness `Hback` are
-discharged once the cell has been handed back. -/
+at any point and the value read is not predictable.  What *is* predictable is
+anything the invariant maintains -- here positivity -- and that is what a
+logically atomic specification lets the caller conclude. -/
 example (l : Loc) (N : Namespace) :
-    ⊢ Iris.inv N iprop(∃ v : Nat, l ↦ v) -∗
+    ⊢ Iris.inv N iprop(∃ v : Nat, l ↦ v ∗ ⌜0 < v⌝) -∗
       wpi_mask GF Hd m (AtomicHeapAPI.load (E := E) (T := Nat) l)
-        (fun _ => iprop(True)) ⊤ := by
+        (fun r => iprop(⌜0 < r⌝)) ⊤ := by
   iintro #Hinv
   istep
-  iinv_atomic Hinv with ⟨⟨%v, Hl⟩, Hcl⟩ back Hback
+  iinv_atomic Hinv with ⟨⟨%v, Hl, %hv⟩, Hcl⟩ back Hback
   iexists v
   isplitl [Hl]
   · iexact Hl
   · imodintro
     iintro %_y Hl'
     imod Hback
-    ihave HI : iprop(∃ w : Nat, l ↦ w) $$ [Hl']
+    ihave HI : iprop(∃ w : Nat, l ↦ w ∗ ⌜0 < w⌝) $$ [Hl']
     · iexists v
-      iexact Hl'
+      isplitl [Hl']
+      · iexact Hl'
+      · ipureintro; exact hv
     ispecialize Hcl $$ HI
     imod Hcl
     imodintro
     iintro %_z _
-    itrivial
+    ipureintro
+    exact hv
 
 end Examples
 
