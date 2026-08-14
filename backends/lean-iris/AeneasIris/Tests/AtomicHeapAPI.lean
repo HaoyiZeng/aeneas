@@ -45,9 +45,7 @@ example (l : Loc) (N : Namespace) :
       wpi_mask GF Hd m (AtomicHeapAPI.load (E := E) (T := Nat) l)
         (fun _ => iprop(True)) ⊤ := by
   iintro #Hinv
-  iapply (AeneasIris.OneShotWpi.IASpec.wand
-    (AtomicHeapAPI.load_spec (E := E) (T := Nat) l (DFrac.own 1)) _) $$ []
-  · itrivial
+  istep
   iinv_atomic Hinv with ⟨⟨%v, Hl⟩, Hcl⟩ back Hback
   iexists v
   isplitl [Hl]

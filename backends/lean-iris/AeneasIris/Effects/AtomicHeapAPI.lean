@@ -99,7 +99,7 @@ theorem load_triple {T : Type} [Nonempty T] (l : Loc) (v : T) (dq : DFrac) :
   · iexact Hl
 
 /-- The same guarantee as `load_spec_multishot`, stated one-shot. -/
-@[istep_rule]
+@[istep_rule atomic]
 theorem load_spec {T : Type} [Nonempty T] (l : Loc) (dq : DFrac) :
     ⟪ ∀ v, l ↦{dq} (v : T) ⟫ Hd m (load (E := E) (T := T) l) @ (∅ : CoPset)
       ⟪ l ↦{dq} v ⟫ ⦃ RET v ⦄ := by

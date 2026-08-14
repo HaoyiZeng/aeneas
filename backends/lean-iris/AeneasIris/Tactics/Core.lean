@@ -443,6 +443,23 @@ elab_rules : tactic
         Read.normProgramInGoal (← getMainGoal) then
       replaceMainGoal [g']
   let mut found : Option (Expr × Name × Expr) := none
+  /- An `IASpec` is applied through `IASpec.wand`, which is its entailment form:
+  the ordinary precondition is framed out of the context -- `itrivial` covers the
+  usual `emp` -- and the update is left as a goal for the caller, who is the one
+  that knows whether the resource is owned or shared. -/
+  let applyAtomic : IStep.Info → TacticM Unit := fun info => do
+    let rule := mkIdent info.rule
+    let wand := mkIdent `AeneasIris.OneShotWpi.IASpec.wand
+    let holes : Array Term := Array.replicate info.nExplicit (← `(_))
+    let ctx ← do
+      let ty ← instantiateMVars (← (← getMainGoal).getType)
+      pure (Read.ctxNames ty)
+    let mut alts : Array (TSyntax `tactic) := #[]
+    for n in ctx do
+      let nId := mkIdent n
+      alts := alts.push (← `(tactic| iapply ($wand ($rule $holes*) _) $$ [$nId:ident]))
+    alts := alts.push (← `(tactic| (iapply ($wand ($rule $holes*) _) $$ []; itrivial)))
+    evalTactic (← `(tactic| first $[| $alts:tactic]*))
   let mut stepped := false
   let mut stuck : Name := .anonymous
   for _ in [0:8] do
@@ -475,7 +492,13 @@ elab_rules : tactic
       pure #[({ rule := n, nExplicit := nExp, style := .triple, mintsLat := false }
               : IStep.Info)]
     | none => pure ((IStep.find? (← getEnv) c).filter (·.style == .triple))
-  if infos.isEmpty then throwError "irule: no rule is registered for {c}"
+  if infos.isEmpty then
+    /- No sequential rule, but perhaps an atomic one: a shared resource cannot be
+    framed out of the context, so the triple path could not have applied. -/
+    if let some info := (IStep.find? (← getEnv) c).find? (·.style == .atomic) then
+      applyAtomic info
+      return
+    throwError "irule: no rule is registered for {c}"
   let applyThm := mkIdent ``AeneasIris.iSpec.apply
   let before := Read.ctxNames ty0
   let g' ← getMainGoal
@@ -517,7 +540,15 @@ elab_rules : tactic
     try evalTactic (← `(tactic| first $[| $ruleAlts:tactic]*))
     catch _ => return
   else
-    evalTactic (← `(tactic| first $[| $ruleAlts:tactic]*))
+    try evalTactic (← `(tactic| first $[| $ruleAlts:tactic]*))
+    catch e =>
+      /- The sequential rules all wanted to frame a resource out of the context.
+      A shared one is not there to be framed, so try the atomic rule, which asks
+      for an update instead. -/
+      if let some info := (IStep.find? (← getEnv) c).find? (·.style == .atomic) then
+        applyAtomic info
+        return
+      throw e
   discharge
   do
     let gs ← getUnsolvedGoals

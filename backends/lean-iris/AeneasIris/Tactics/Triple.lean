@@ -91,6 +91,8 @@ inductive Style where
   | triple
   /-- Already continuation-style: the premise mentions the weakest precondition of the continuation. -/
   | cont
+  /-- An `IASpec`: the ordinary precondition is framed, the update becomes a goal. -/
+  | atomic
 deriving Inhabited, Repr, DecidableEq
 
 structure Info where
@@ -170,12 +172,15 @@ open Meta in
 def addRule (decl : Name) (stx : Syntax) (kind : AttributeKind) : AttrM Unit := do
   unless kind == AttributeKind.global do
     throwError "istep_rule: only global registration is supported"
-  let style : Style := if stx[1].isNone then .triple else .cont
+  let style : Style :=
+    if stx[1].isNone then .triple
+    else if stx[1][0].isOfKind `token.atomic || stx[1][0].getAtomVal == "atomic" then .atomic
+    else .cont
   let (op, n, mintsLat) ← MetaM.run' (analyse decl style)
   modifyEnv (ext.addEntry · (op, { rule := decl, nExplicit := n, style, mintsLat }))
 
-/-- `@[istep_rule]` / `@[istep_rule cont]`. -/
-syntax (name := istep_rule) "istep_rule" (ppSpace &"cont")? : attr
+/-- `@[istep_rule]` / `@[istep_rule cont]` / `@[istep_rule atomic]`. -/
+syntax (name := istep_rule) "istep_rule" (ppSpace (&"cont" <|> &"atomic"))? : attr
 
 initialize registerBuiltinAttribute {
     name := `istep_rule
