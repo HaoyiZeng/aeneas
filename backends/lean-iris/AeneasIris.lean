@@ -18,6 +18,7 @@ import AeneasIris.Lib.RwLockImpl
 
 import AeneasIris.Lib.ArcAPI
 import AeneasIris.Lib.ArcImpl
+import AeneasIris.Lib.AtomicArcImpl
 
 import AeneasIris.Tests.Basic
 import AeneasIris.Tests.Zoo
