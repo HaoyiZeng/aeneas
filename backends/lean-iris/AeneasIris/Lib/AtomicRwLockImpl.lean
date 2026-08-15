@@ -981,6 +981,51 @@ theorem drop_spec (γ : GName) (lk : Handle T) (v : T) (M : CoPset) :
     ⦃ r, ⌜r = ()⌝ ⦄ :=
   RwLockImpl.drop_spec γ lk v M
 
+/-- The interface is met over the atomic heap as well, at partial mode.
+
+A `def` and not an `instance`: `RwLockImpl` already supplies one at the same
+`GF` and `Hd`, and search would have no way to choose.  Partial because
+`try_read` retries, which is what reading the state and swapping it separately
+costs once something may happen in between. -/
+@[reducible] noncomputable def atomicRwLockAPI : RwLockAPI GF Hd Mode.part where
+  RwLock := Handle
+  ReadGuard := ReadGuard
+  WriteGuard := WriteGuard
+
+  new := new
+  drop := drop
+  try_read := try_read
+  try_write := try_write
+  read := read
+  write := write
+  read_deref := read_deref
+  write_deref := write_deref
+  write_deref_mut := write_deref_mut
+
+  isRwLock := isRwLock
+  writeGuard := writeGuard
+  readGuardFrac := readGuardFrac
+
+  isRwLock_timeless := by infer_instance
+  writeGuard_timeless := by infer_instance
+  readGuardFrac_timeless := by infer_instance
+
+  isRwLock_exclusive := isRwLock_exclusive
+  readGuardFrac_split := readGuardFrac_split
+  readGuardFrac_state := readGuardFrac_state
+  readGuardFrac_agree := readGuardFrac_agree
+  writeGuard_state := writeGuard_state
+
+  new_spec := new_spec
+  drop_spec := drop_spec
+  try_write_spec := try_write_spec
+  write_spec := write_spec
+  try_read_spec := try_read_spec
+  read_spec := read_spec
+  write_deref_spec := write_deref_spec
+  read_deref_spec := read_deref_spec
+  write_deref_mut_spec := write_deref_mut_spec
+
 end Specs
 
 end AeneasIris.AtomicRwLockImpl
