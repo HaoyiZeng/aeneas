@@ -715,6 +715,203 @@ private theorem read_release_box (γ : GName) (lk : Handle T) (v : T) :
   iexact HRG
 
 
+/-- The read acquisition on its own: it retries a lost swap and reports only a
+lock held for writing.  Both `try_read` and the blocking `read` are this plus a
+continuation. -/
+private theorem try_read_acquire_spec (γ : GName) (lk : Handle T) :
+    ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫
+        Hd Mode.part (try_read_acquire (E := E) lk) @ (∅ : CoPset)
+      ⟪ isRwLock γ lk (match s with
+                       | .free => .read 0
+                       | .read n => .read (n + 1)
+                       | .write => .write) v
+      | g, RET (if s = LockState.write then none else some g)
+      ; if s = LockState.write then emp else readGuardFrac γ g 1 v ⟫ := by
+  simp only [atomicWpi]
+  iintro %Φ HAU
+  simp only [try_read_acquire]
+  iloeb as IH
+  iunfold ITree.iter
+  ibind
+  ibind
+  simp only [AtomicHeapAPI.load]
+  iapply Conc.wpi_sync
+  iapply (wpi_aupd_choose (hsub := by aupd_mask)) $$ HAU
+  iintro %sv Hlock
+  obtain ⟨s₁, v₁⟩ := sv
+  iunfold isRwLock at Hlock
+  icases Hlock with ⟨Hst, Hcore⟩
+  istep
+  rcases s₁ with _ | mm | _
+  · ileft
+    isplitl [Hst Hcore]
+    · iunfold isRwLock
+      isplitl [Hst]
+      · simp only [LockState.word]
+        iexact Hst
+      · iexact Hcore
+    · iintro HAU
+      simp only [LockState.word, if_neg (show ¬((0 : Int) < 0) from by grind)]
+      ibind
+      simp only [AtomicHeapAPI.cas]
+      iapply Conc.wpi_sync
+      iapply (wpi_aupd_choose (hsub := by aupd_mask)) $$ HAU
+      iintro %sv2 Hlock2
+      obtain ⟨s₂, v₂⟩ := sv2
+      iunfold isRwLock at Hlock2
+      icases Hlock2 with ⟨Hst2, Hcore2⟩
+      by_cases hne : s₂ = LockState.free
+      · subst hne
+        simp only [LockState.word]
+        iapply (HeapAPI.wpi_cas_succ (Hd := Hd) (m := Mode.part) (E := E) lk.state
+          (0 : Int) ((0 : Int) + 1))
+        iapply (AeneasIris.Step.lat_intro Mode.part _)
+        isplitl [Hst2]
+        · iexact Hst2
+        · iintro Hst2
+          imod (rwAcquire_free γ lk.data v₂) $$ [Hcore2] with ⟨%sq, Hcore3, Hfrag⟩
+          · iexact Hcore2
+          imodintro
+          iright
+          iexists ()
+          isplitl [Hst2 Hcore3]
+          · iunfold isRwLock
+            simp only [LockState.word]
+            isplitl [Hst2]
+            · iexact Hst2
+            · iexact Hcore3
+          · iintro HΨ
+            have hne1 : ∀ y : ReadGuard T,
+                (if LockState.free = LockState.write then none else some y) = some y :=
+              fun _ => if_neg (by intro h; cases h)
+            have hne2 : ∀ P : IProp GF,
+                (if LockState.free = LockState.write then iprop(emp) else P) = P :=
+              fun _ => if_neg (by intro h; cases h)
+            simp only [hne1, hne2, AtomicWpi.wandM_some]
+            iret
+            iret
+            iapply HΨ $$ %(⟨lk⟩ : ReadGuard T)
+            iunfold readGuardFrac
+            iexists sq
+            simp only [RwPos.ofQp_one]
+            iunfold rdFrag at Hfrag
+            iexact Hfrag
+      · iapply (HeapAPI.wpi_cas_fail (Hd := Hd) (m := Mode.part) (E := E) lk.state
+          s₂.word (0 : Int) ((0 : Int) + 1) (DFrac.own 1)
+          (by intro h; exact hne (LockState.word_injective h)))
+        iapply (AeneasIris.Step.lat_intro Mode.part _)
+        isplitl [Hst2]
+        · iexact Hst2
+        · iintro Hst2
+          imodintro
+          ileft
+          isplitl [Hst2 Hcore2]
+          · iunfold isRwLock
+            isplitl [Hst2]
+            · iexact Hst2
+            · iexact Hcore2
+          · iintro HAU
+            simp only [Bool.false_eq_true, if_false]
+            iret
+            dsimp only
+            iapply IH $$ HAU
+  · ileft
+    isplitl [Hst Hcore]
+    · iunfold isRwLock
+      isplitl [Hst]
+      · simp only [LockState.word]
+        iexact Hst
+      · iexact Hcore
+    · iintro HAU
+      simp only [LockState.word,
+        if_neg (show ¬(((mm : Nat) : Int) + 1 < 0) from by grind)]
+      ibind
+      simp only [AtomicHeapAPI.cas]
+      iapply Conc.wpi_sync
+      iapply (wpi_aupd_choose (hsub := by aupd_mask)) $$ HAU
+      iintro %sv2 Hlock2
+      obtain ⟨s₂, v₂⟩ := sv2
+      iunfold isRwLock at Hlock2
+      icases Hlock2 with ⟨Hst2, Hcore2⟩
+      by_cases hne : s₂ = LockState.read mm
+      · subst hne
+        simp only [LockState.word]
+        iapply (HeapAPI.wpi_cas_succ (Hd := Hd) (m := Mode.part) (E := E) lk.state
+          (((mm : Nat) : Int) + 1) ((((mm : Nat) : Int) + 1) + 1))
+        iapply (AeneasIris.Step.lat_intro Mode.part _)
+        isplitl [Hst2]
+        · iexact Hst2
+        · iintro Hst2
+          imod (rwAcquire_read γ lk.data mm v₂) $$ [Hcore2] with ⟨%sq, Hcore3, Hfrag⟩
+          · iexact Hcore2
+          imodintro
+          iright
+          iexists ()
+          isplitl [Hst2 Hcore3]
+          · iunfold isRwLock
+            have hcast : ((mm : Nat) : Int) + 1 + 1 = ((mm + 1 : Nat) : Int) + 1 := by
+              push_cast; ring
+            rw [hcast]
+            dsimp only [LockState.word]
+            isplitl [Hst2]
+            · iexact Hst2
+            · iexact Hcore3
+          · iintro HΨ
+            have hne1 : ∀ y : ReadGuard T,
+                (if LockState.read mm = LockState.write then none else some y) = some y :=
+              fun _ => if_neg (by intro h; cases h)
+            have hne2 : ∀ P : IProp GF,
+                (if LockState.read mm = LockState.write then iprop(emp) else P) = P :=
+              fun _ => if_neg (by intro h; cases h)
+            simp only [hne1, hne2, AtomicWpi.wandM_some]
+            iret
+            iret
+            iapply HΨ $$ %(⟨lk⟩ : ReadGuard T)
+            iunfold readGuardFrac
+            iexists sq
+            simp only [RwPos.ofQp_one]
+            iunfold rdFrag at Hfrag
+            iexact Hfrag
+      · iapply (HeapAPI.wpi_cas_fail (Hd := Hd) (m := Mode.part) (E := E) lk.state
+          s₂.word (((mm : Nat) : Int) + 1) ((((mm : Nat) : Int) + 1) + 1) (DFrac.own 1)
+          (by intro h; exact hne (LockState.word_injective h)))
+        iapply (AeneasIris.Step.lat_intro Mode.part _)
+        isplitl [Hst2]
+        · iexact Hst2
+        · iintro Hst2
+          imodintro
+          ileft
+          isplitl [Hst2 Hcore2]
+          · iunfold isRwLock
+            isplitl [Hst2]
+            · iexact Hst2
+            · iexact Hcore2
+          · iintro HAU
+            simp only [Bool.false_eq_true, if_false]
+            iret
+            dsimp only
+            iapply IH $$ HAU
+  · simp only [LockState.word]
+    have hprog : ∀ A B : ITree E (Unit ⊕ Option (ReadGuard T)),
+        (if (-1 : Int) < 0 then A else B) = A := fun _ _ => if_pos (by grind)
+    have hret : ∀ z : ReadGuard T,
+        (if LockState.write = LockState.write then none else some z) = none :=
+      fun _ => if_pos rfl
+    iright
+    iexists ()
+    isplitl [Hst Hcore]
+    · iunfold isRwLock
+      isplitl [Hst]
+      · simp only [LockState.word]
+        iexact Hst
+      · iexact Hcore
+    · iintro HΨ
+      simp only [hprog]
+      iret
+      simp only [hret, AtomicWpi.wandM_some]
+      iret
+      iapply HΨ $$ %(⟨lk⟩ : ReadGuard T)
+      itrivial
 theorem try_read_spec (γ : GName) (lk : Handle T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd Mode.part (try_read (E := E) lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk (match s with
