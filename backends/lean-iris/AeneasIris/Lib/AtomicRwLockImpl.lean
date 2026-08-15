@@ -57,11 +57,12 @@ noncomputable def read_acquire (lk : Handle T) : ITree E (ReadGuard T) :=
 noncomputable def write_acquire (lk : Handle T) : ITree E (WriteGuard T) :=
   AeneasIris.Conc.waitUntil (try_write_acquire (E := E) lk)
 
-noncomputable def read_release (g : ReadGuard T) : ITree E Unit :=
-  ITree.iter (fun _ => do
-    let n : Int ← load g.lock.state
-    let ok ← cas g.lock.state n (n - 1)
-    if ok then return .inr () else return .inl ()) ()
+/-- Releasing a read lock is a decrement, so it is one atomic operation and not a
+compare-and-swap retried until it wins.  That is what Rust does, and here it also
+means the release cannot fail: `.read 0` has word 1 and `.free` has word 0. -/
+noncomputable def read_release (g : ReadGuard T) : ITree E Unit := do
+  let _ : Int ← faa g.lock.state (-1)
+  return ()
 
 noncomputable def write_release (g : WriteGuard T) : ITree E Unit :=
   store g.lock.state (0 : Int)
@@ -159,6 +160,49 @@ private theorem wpi_aupd_choose {A B V : Type}
       imodintro
       iapply Hret $$ HΨ
   · iapply Hbody $$ Hα
+
+
+omit [HeapGS GF] in
+private theorem rwRelease_last (γ : GName) (c : Loc) (Y s : RwPos) :
+    iprop(iOwn (F := RwSpinF) γ (● rwFragR c 1 Y) ∗ iOwn (F := RwSpinF) γ (◯ rwFragR c 1 s))
+      ⊢@{IProp GF} iprop(|==> (⌜Y = s⌝ ∗ iOwn (F := RwSpinF) γ (● rwLocR c)
+                  ∗ iOwn (F := RwSpinF) γ (◯ rwLocR c))) := by
+  refine (BI.and_intro iOwn_cmraValid_op .rfl).trans (BI.persistent_and_sep_mp.trans ?_)
+  iintro ⟨%hv, H⟩
+  ihave Hupd : iprop(|==> iOwn (F := RwSpinF) γ ((● rwLocR c : Auth RwRes) • ◯ rwLocR c)) $$ [H]
+  · iapply (BI.entails_wand (iOwn_update_op
+      (rwAuth_release c (rwFragR c 1 Y) (rwFragR c 1 s) (rwLocR c) (rwLocR_valid c)
+        (rwFrame_zero c 1 Y s))))
+    iexact H
+  imod Hupd with H2
+  imodintro
+  isplitr [H2]
+  · ipureintro; exact rwIncl_last hv
+  · iapply (BI.entails_wand iOwn_op.mp); iexact H2
+
+
+omit [HeapGS GF] in
+private theorem rwRelease_more (γ : GName) (c : Loc) (N Y s : RwPos) :
+    iprop(iOwn (F := RwSpinF) γ (● rwFragR c (1 + N) Y)
+        ∗ iOwn (F := RwSpinF) γ (◯ rwFragR c 1 s))
+      ⊢@{IProp GF} iprop(|==> (∃ Q' : RwPos, ⌜Y = s + Q'⌝ ∗ iOwn (F := RwSpinF) γ (● rwFragR c N Q')
+                  ∗ iOwn (F := RwSpinF) γ (◯ rwLocR c))) := by
+  refine (BI.and_intro iOwn_cmraValid_op .rfl).trans (BI.persistent_and_sep_mp.trans ?_)
+  iintro ⟨%hv, H⟩
+  obtain ⟨Q', hQ⟩ := rwIncl_more hv
+  subst hQ
+  ihave Hupd : iprop(|==> iOwn (F := RwSpinF) γ
+      ((● rwFragR c N Q' : Auth RwRes) • ◯ rwLocR c)) $$ [H]
+  · iapply (BI.entails_wand (iOwn_update_op
+      (rwAuth_release c (rwFragR c (1 + N) (s + Q')) (rwFragR c 1 s) (rwFragR c N Q')
+        (rwFragR_valid c N Q') (rwFrame_succ c s N Q'))))
+    iexact H
+  imod Hupd with H2
+  imodintro
+  iexists Q'
+  isplitr [H2]
+  · ipureintro; rfl
+  · iapply (BI.entails_wand iOwn_op.mp); iexact H2
 
 
 theorem new_spec (v : T) (M : CoPset) :
@@ -427,7 +471,126 @@ theorem read_release_spec (γ : GName) (g : ReadGuard T) (v : T) :
       ⟪ (isRwLock γ g.lock .free v ∗ ⌜s = .read 0⌝) ∨
         (∃ n : Nat, isRwLock γ g.lock (.read n) v ∗ ⌜s = .read (n + 1)⌝)
       | RET () ⟫ := by
-  sorry
+  iintro HR
+  simp only [atomicWpi]
+  iintro %Φ HAU
+  simp only [read_release, AtomicHeapAPI.faa, sync_bind]
+  iapply Conc.wpi_sync
+  iapply (wpi_aupd_choose (hsub := by aupd_mask)) $$ HAU
+  iintro %s₁ Hlock
+  rcases s₁ with _ | mm | _
+  · ihave Hpair : iprop(isRwLock γ g.lock LockState.free v ∗ readGuardFrac γ g 1 v) $$ [Hlock HR]
+    · isplitl [Hlock]
+      · iexact Hlock
+      · iexact HR
+    ihave %hbad := readGuardFrac_state γ g.lock LockState.free g 1 v v $$ Hpair
+    exact absurd hbad (by rintro ⟨k, hk⟩; cases hk)
+  · iunfold isRwLock at Hlock
+    icases Hlock with ⟨Hst, Hcore⟩
+    iunfold rwCore at Hcore
+    icases Hcore with ⟨%qout, %qrest, %hsum, Hauth, #Hloc, Hdat⟩
+    iunfold readGuardFrac at HR
+    icases HR with ⟨%sh, Hfrag, Hdr⟩
+    istep
+    rcases mm with _ | k
+    · simp only [rwAuth_some, RwPos.ofSucc_zero, RwPos.ofQp_one] at *
+      iapply (wpi_update (H := Hd) _ _ _).mp
+      imod (rwRelease_last γ g.lock.data (RwPos.ofQp qout) (RwPos.ofQp sh)) $$ [Hauth Hfrag]
+        with ⟨%hqs, Hauth2, Hloc2⟩
+      · isplitl [Hauth]
+        · iexact Hauth
+        · iexact Hfrag
+      imodintro
+      have hq : qout = sh := RwPos.ofQp_inj hqs
+      have hfr : qrest + sh = (1 : Qp) := by
+        subst hq
+        simp only [Qp.ext_iff, Qp.val_add, Qp.val_one] at *
+        grind
+      ihave Hfull : iprop(pointsTo g.lock.data (DFrac.own (1 : Qp)) v) $$ [Hdat Hdr]
+      · simp only [← hfr]
+        iapply (BI.entails_wand (pointsTo_split (GF := GF) g.lock.data qrest sh v).2)
+        isplitl [Hdat]
+        · iexact Hdat
+        · iexact Hdr
+      istep
+      iright
+      iexists ()
+      isplitl [Hst Hauth2 Hloc2 Hfull]
+      · ileft
+        isplitl [Hst Hauth2 Hloc2 Hfull]
+        · iunfold isRwLock
+          isplitl [Hst]
+          · simp only [LockState.word] at *
+            have hw0 : ((0 : Nat) : Int) + 1 + -1 = (0 : Int) := by grind
+            simp only [hw0]
+            iexact Hst
+          · iunfold rwCore
+            simp only [rwAuth_none]
+            isplitl [Hauth2]
+            · iexact Hauth2
+            · isplitl [Hloc2]
+              · iexact Hloc2
+              · iexact Hfull
+        · itrivial
+      · iintro HΨ
+        simp only [AtomicWpi.wandM_none]
+        iapply HΨ $$ %()
+    · simp only [rwAuth_some, RwPos.ofSucc_succ, RwPos.ofQp_one] at *
+      iapply (wpi_update (H := Hd) _ _ _).mp
+      imod (rwRelease_more γ g.lock.data (RwPos.ofSucc k) (RwPos.ofQp qout) (RwPos.ofQp sh))
+        $$ [Hauth Hfrag] with ⟨%Q', %hqs, Hauth2, Hloc2⟩
+      · isplitl [Hauth]
+        · iexact Hauth
+        · iexact Hfrag
+      imodintro
+      have hQpos : (0 : Rat) < Q'.val := Q'.pos
+      have hfr : (⟨Q'.val, hQpos⟩ : Qp) + (qrest + sh) = (1 : Qp) := by
+        have h1 := congrArg RwPos.val hqs
+        simp only [RwPos.ofQp_val, RwPos.val_add] at h1
+        simp only [Qp.ext_iff, Qp.val_add, Qp.val_one] at *
+        grind
+      ihave Hrest : iprop(pointsTo g.lock.data (DFrac.own (qrest + sh)) v) $$ [Hdat Hdr]
+      · iapply (BI.entails_wand (pointsTo_split (GF := GF) g.lock.data qrest sh v).2)
+        isplitl [Hdat]
+        · iexact Hdat
+        · iexact Hdr
+      istep
+      iright
+      iexists ()
+      isplitl [Hst Hauth2 Hloc2 Hrest]
+      · iright
+        iexists k
+        isplitl [Hst Hauth2 Hloc2 Hrest]
+        · iunfold isRwLock
+          isplitl [Hst]
+          · simp only [LockState.word] at *
+            push_cast at *
+            have hwk : ((k : Nat) : Int) + 1 + 1 + -1 = ((k : Nat) : Int) + 1 := by grind
+            simp only [hwk]
+            iexact Hst
+          · iunfold rwCore
+            have hQ' : RwPos.ofQp (⟨Q'.val, hQpos⟩ : Qp) = Q' := RwPos.ext rfl
+            simp only [rwAuth_some]
+            iexists (⟨Q'.val, hQpos⟩ : Qp)
+            iexists (qrest + sh)
+            isplitr [Hauth2 Hloc2 Hrest]
+            · ipureintro; exact hfr
+            · isplitl [Hauth2]
+              · simp only [hQ']
+                iexact Hauth2
+              · isplitl [Hloc2]
+                · iexact Hloc2
+                · iexact Hrest
+        · itrivial
+      · iintro HΨ
+        simp only [AtomicWpi.wandM_none]
+        iapply HΨ $$ %()
+  · ihave Hpair : iprop(isRwLock γ g.lock LockState.write v ∗ readGuardFrac γ g 1 v) $$ [Hlock HR]
+    · isplitl [Hlock]
+      · iexact Hlock
+      · iexact HR
+    ihave %hbad := readGuardFrac_state γ g.lock LockState.write g 1 v v $$ Hpair
+    exact absurd hbad (by rintro ⟨k, hk⟩; cases hk)
 theorem try_read_spec (γ : GName) (lk : Handle T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd m (try_read (E := E) lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk (match s with
