@@ -331,9 +331,9 @@ theorem new_spec (v : T) (M : CoPset) :
 
 theorem write_release_spec (γ : GName) (g : WriteGuard T) (v₁ : T) :
     ⊢ writeGuard γ g v₁ -∗
-      ⟪ ∀ v₀, isRwLock γ g.lock .write v₀ ⟫
+      ⟪ ∀ s v₀, isRwLock γ g.lock s v₀ ⟫
         Hd m (write_release (E := E) g) @ (∅ : CoPset)
-      ⟪ isRwLock γ g.lock .free v₁ | RET () ⟫ :=
+      ⟪ isRwLock γ g.lock .free v₁ ∗ ⌜s = .write⌝ | RET () ⟫ :=
   RwLockImpl.write_release_spec γ g v₁
 
 omit [Aeneas.Std.FailE -< E] in
@@ -417,9 +417,9 @@ theorem try_write_spec (γ : GName) (lk : Handle T) :
         ; if s = .free then
             writeGuard γ g v ∗
             □ (∀ v₁ : T, writeGuard γ g v₁ -∗
-                 ⟪ ∀ v₀, isRwLock γ lk .write v₀ ⟫
+                 ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫
                      Hd m (rel g) @ (∅ : CoPset)
-                   ⟪ isRwLock γ lk .free v₁ | RET () ⟫)
+                   ⟪ isRwLock γ lk .free v₁ ∗ ⌜s' = .write⌝ | RET () ⟫)
           else emp ⟫ := by
   simp only [atomicWpi]
   iintro %Φ HAU
@@ -508,8 +508,8 @@ theorem write_spec (γ : GName) (lk : Handle T) :
         | g rel, RET (g, rel)
         ; writeGuard γ g v ∗
           □ (∀ v₁ : T, writeGuard γ g v₁ -∗
-               ⟪ ∀ v₀, isRwLock γ lk .write v₀ ⟫ Hd .part (rel g) @ (∅ : CoPset)
-                   ⟪ isRwLock γ lk .free v₁ | RET () ⟫) ⟫ := by
+               ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫ Hd .part (rel g) @ (∅ : CoPset)
+                   ⟪ isRwLock γ lk .free v₁ ∗ ⌜s' = .write⌝ | RET () ⟫) ⟫ := by
   simp only [atomicWpi]
   iintro %Φ HAU
   simp only [write, write_acquire]

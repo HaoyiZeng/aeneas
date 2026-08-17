@@ -691,6 +691,17 @@ theorem writeGuard_state (γ : GName) (lk : Handle T) (s : LockState)
     simp only [isRwLock, writeGuard, rwCore] at *
     itrivial
 
+/-- `writeGuard_state` in wand form, so a caller can read the state off without
+having to assemble the two sides into a `∗` first. -/
+theorem writeGuard_state_wand (γ : GName) (lk : Handle T) (s : LockState)
+    (g : WriteGuard T) (v v' : T) :
+    ⊢@{IProp GF} isRwLock γ lk s v -∗ writeGuard γ g v' -∗ ⌜s = .write⌝ := by
+  iintro H1 H2
+  iapply writeGuard_state γ lk s g v v'
+  isplitl [H1]
+  · iexact H1
+  · iexact H2
+
 end Assertions
 
 
@@ -749,18 +760,28 @@ theorem new_spec (v : T) (M : CoPset) :
 
 /-! ## Write -/
 
-/-- **`write_release`.** -/
+/-- **`write_release`.**
+
+The update is opened at an *arbitrary* state `s` and hands `⌜s = .write⌝` back on
+commit, rather than demanding `.write` up front.  Both are provable — `writeGuard_state`
+settles it — but only this direction is usable: `write_spec` surrenders the guard to
+the release closure *before* the update is opened, so a caller holding only the
+update has nothing left to prove `.write` with.  Asking it to would force it to
+park a witness in its own invariant and reason about fractions of it.  This
+matches `read_release_spec`, which already returns the state it found. -/
 theorem write_release_spec (γ : GName) (g : WriteGuard T) (v₁ : T) :
     ⊢ writeGuard γ g v₁ -∗
-      ⟪ ∀ v₀, isRwLock γ g.lock .write v₀ ⟫
+      ⟪ ∀ s v₀, isRwLock γ g.lock s v₀ ⟫
         Hd m (write_release (E := E) g) @ (∅ : CoPset)
-      ⟪ isRwLock γ g.lock .free v₁ | RET () ⟫ := by
+      ⟪ isRwLock γ g.lock .free v₁ ∗ ⌜s = .write⌝ | RET () ⟫ := by
   iintro HG
   simp only [atomicWpi]
   iintro %Φ HAU
   simp only [write_release]
   istep
-  iaupd_commit HAU as v₀ with Hlock
+  iaupd_commit HAU as ⟨s, v₀⟩ with Hlock
+  ihave %hs := writeGuard_state_wand γ g.lock s g v₀ v₁ $$ Hlock HG
+  subst hs
   iunfold isRwLock at Hlock
   icases Hlock with ⟨Hst, Hcore⟩
   simp only [LockState.word]
@@ -771,15 +792,17 @@ theorem write_release_spec (γ : GName) (g : WriteGuard T) (v₁ : T) :
   icases HG with ⟨Hdata, _⟩
   iexists ()
   isplitl [Hst Hauth Hloc Hdata]
-  · iunfold isRwLock
-    isplitl [Hst]
-    · simp only [LockState.word]; iexact Hst
-    · iunfold rwCore
-      isplitl [Hauth]
-      · iexact Hauth
-      · isplitl [Hloc]
-        · iexact Hloc
-        · iexact Hdata
+  · isplitl [Hst Hauth Hloc Hdata]
+    · iunfold isRwLock
+      isplitl [Hst]
+      · simp only [LockState.word]; iexact Hst
+      · iunfold rwCore
+        isplitl [Hauth]
+        · iexact Hauth
+        · isplitl [Hloc]
+          · iexact Hloc
+          · iexact Hdata
+    · ipureintro; rfl
   · iintro HΨ
     simp only [AtomicWpi.wandM_none]
     iapply HΨ $$ %()
@@ -863,9 +886,9 @@ theorem try_write_spec (γ : GName) (lk : Handle T) :
         ; if s = .free then
             writeGuard γ g v ∗
             □ (∀ v₁ : T, writeGuard γ g v₁ -∗
-                 ⟪ ∀ v₀, isRwLock γ lk .write v₀ ⟫
+               ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫
                      Hd m (rel g) @ (∅ : CoPset)
-                   ⟪ isRwLock γ lk .free v₁ | RET () ⟫)
+                 ⟪ isRwLock γ lk .free v₁ ∗ ⌜s' = .write⌝ | RET () ⟫)
           else emp ⟫ := by
   simp only [atomicWpi]
   iintro %Φ HAU
@@ -983,8 +1006,8 @@ theorem write_spec (γ : GName) (lk : Handle T) :
         | g rel, RET (g, rel)
         ; writeGuard γ g v ∗
           □ (∀ v₁ : T, writeGuard γ g v₁ -∗
-               ⟪ ∀ v₀, isRwLock γ lk .write v₀ ⟫ Hd .part (rel g) @ (∅ : CoPset)
-                   ⟪ isRwLock γ lk .free v₁ | RET () ⟫) ⟫ := by
+               ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫ Hd .part (rel g) @ (∅ : CoPset)
+                   ⟪ isRwLock γ lk .free v₁ ∗ ⌜s' = .write⌝ | RET () ⟫) ⟫ := by
   simp only [atomicWpi]
   iintro %Φ HAU
   simp only [write, write_acquire]

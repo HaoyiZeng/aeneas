@@ -97,8 +97,8 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
         ; if s = .free then
             writeGuard γ g v ∗
             □ (∀ v₁ : T, writeGuard γ g v₁ -∗
-                 ⟪ ∀ v₀, isRwLock γ lk .write v₀ ⟫ Hd m (rel g) @ (∅ : CoPset)
-                   ⟪ isRwLock γ lk .free v₁ | RET () ⟫)
+                 ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫ Hd m (rel g) @ (∅ : CoPset)
+                   ⟪ isRwLock γ lk .free v₁ ∗ ⌜s' = .write⌝ | RET () ⟫)
           else emp ⟫
 
   /-- Releasing a read guard retries its decrement, so its closure is stated at
@@ -119,15 +119,22 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
                    | RET () ⟫) ⟫
 
   /-- Blocking acquires spin, so they are only partially correct: a thread that
-  never wins the race owes nothing. -/
+  never wins the race owes nothing.
+
+  The release closure opens its update at an *arbitrary* state and returns
+  `⌜s' = .write⌝`, rather than demanding `.write` up front.  This matters because
+  the guard is surrendered to the closure before the update is opened, so a caller
+  holding only the update has nothing left to prove `.write` with; requiring it
+  would force every caller to park a witness in its own invariant and reason about
+  fractions of it.  `read_spec` below already returns the state it found. -/
   write_spec {T : Type} (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd .part (write lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk .write v ∗ ⌜s = .free⌝
         | g rel, RET (g, rel)
         ; writeGuard γ g v ∗
           □ (∀ v₁ : T, writeGuard γ g v₁ -∗
-               ⟪ ∀ v₀, isRwLock γ lk .write v₀ ⟫ Hd .part (rel g) @ (∅ : CoPset)
-                   ⟪ isRwLock γ lk .free v₁ | RET () ⟫) ⟫
+               ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫ Hd .part (rel g) @ (∅ : CoPset)
+                   ⟪ isRwLock γ lk .free v₁ ∗ ⌜s' = .write⌝ | RET () ⟫) ⟫
 
   read_spec {T : Type} (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd .part (read lk) @ (∅ : CoPset)
