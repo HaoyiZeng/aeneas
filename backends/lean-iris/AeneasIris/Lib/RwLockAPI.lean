@@ -77,6 +77,21 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
   readGuardFrac_split {T : Type} γ (g : ReadGuard T) q₁ q₂ v :
     iprop(readGuardFrac γ g (q₁ + q₂) v)
       ⊣⊢ iprop(readGuardFrac γ g q₁ v ∗ readGuardFrac γ g q₂ v)
+  /-- Absorb another permit for the same lock into your own guard.
+
+  This is the `←` direction of `readGuardFrac_split`, generalised across guards:
+  two permits at one `γ` are for one lock, so their fractions add.  The `→`
+  direction does *not* generalise -- handing out a permit at an arbitrary other
+  guard would fabricate a claim about a lock one does not hold -- which is why
+  this is a separate rule rather than a wider `⊣⊢`.
+
+  Without it a client that parks a fraction in a shared invariant has no way to
+  name the guard it will be recombined with, and must either fix a canonical
+  guard per lock (over-constraining implementations whose guards are genuinely
+  distinct) or break the abstraction. -/
+  readGuardFrac_combine {T : Type} γ (g₁ g₂ : ReadGuard T) q₁ q₂ v :
+    iprop(readGuardFrac γ g₁ q₁ v ∗ readGuardFrac γ g₂ q₂ v)
+      ⊢@{IProp GF} iprop(readGuardFrac γ g₁ (q₁ + q₂) v)
   readGuardFrac_state {T : Type} γ (lk : RwLock T) s (g : ReadGuard T) q v v' :
     iprop(isRwLock γ lk s v ∗ readGuardFrac γ g q v') ⊢@{IProp GF} iprop(⌜∃ n, s = .read n⌝)
   readGuardFrac_agree {T : Type} γ (lk : RwLock T) s (g : ReadGuard T) q v v' :

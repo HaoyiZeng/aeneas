@@ -1403,6 +1403,7 @@ costs once something may happen in between. -/
 
   isRwLock_exclusive := isRwLock_exclusive
   readGuardFrac_split := readGuardFrac_split
+  readGuardFrac_combine := RwLockImpl.readGuardFrac_combine
   readGuardFrac_state := readGuardFrac_state
   readGuardFrac_agree := readGuardFrac_agree
   writeGuard_state := writeGuard_state

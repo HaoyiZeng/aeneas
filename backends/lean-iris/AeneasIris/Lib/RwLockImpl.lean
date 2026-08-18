@@ -572,6 +572,63 @@ theorem readGuardFrac_split (γ : GName) (g : ReadGuard T) (q₁ q₂ : Qp) (v :
       · iexact Hp1
       · iexact Hp2
 
+/-- Two read permits at the same ghost name are for the same lock.
+
+`rwFragR` carries the data location in a `LocA`, whose composition sends two
+different locations to `bad`.  So owning both fragments at one `γ` already
+forces the locations to agree -- no separate "which lock is this guard for"
+knowledge is needed. -/
+theorem readGuardFrac_loc_agree (γ : GName) (g₁ g₂ : ReadGuard T)
+    (q₁ q₂ : Qp) (v₁ v₂ : T) :
+    iprop(readGuardFrac (GF := GF) γ g₁ q₁ v₁ ∗ readGuardFrac γ g₂ q₂ v₂)
+      ⊢@{IProp GF} iprop(⌜g₁.lock.data = g₂.lock.data⌝) := by
+  iintro ⟨H1, H2⟩
+  simp only [readGuardFrac] at *
+  icases H1 with ⟨%s₁, Ho1, -⟩
+  icases H2 with ⟨%s₂, Ho2, -⟩
+  ihave Hboth : iprop(iOwn (F := RwSpinF) γ (◯ rwFragR g₁.lock.data (RwPos.ofQp q₁) (RwPos.ofQp s₁))
+      ∗ iOwn (F := RwSpinF) γ (◯ rwFragR g₂.lock.data (RwPos.ofQp q₂) (RwPos.ofQp s₂))) $$ [Ho1 Ho2]
+  · isplitl [Ho1]
+    · iexact Ho1
+    · iexact Ho2
+  ihave %hv := iOwn_cmraValid_op $$ Hboth
+  ipureintro
+  obtain ⟨-, h2⟩ := Auth.frag_op_valid.mp hv
+  by_contra hne
+  apply h2
+  show LocA.op (.at g₁.lock.data) (.at g₂.lock.data) = LocA.bad
+  simp only [LocA.op, if_neg hne]
+
+/-- Absorb another permit for the same lock into your own guard.
+
+The `←` direction of `readGuardFrac_split` generalised across guards.  The `→`
+direction cannot be: handing out a permit at an *arbitrary* other guard would
+let one fabricate a claim about a lock one does not hold. -/
+theorem readGuardFrac_combine (γ : GName) (g₁ g₂ : ReadGuard T)
+    (q₁ q₂ : Qp) (v : T) :
+    iprop(readGuardFrac (GF := GF) γ g₁ q₁ v ∗ readGuardFrac γ g₂ q₂ v)
+      ⊢@{IProp GF} readGuardFrac γ g₁ (q₁ + q₂) v := by
+  iintro H
+  ihave %hloc := readGuardFrac_loc_agree γ g₁ g₂ q₁ q₂ v v $$ H
+  icases H with ⟨H1, H2⟩
+  simp only [readGuardFrac] at *
+  icases H1 with ⟨%s₁, Ho1, Hp1⟩
+  icases H2 with ⟨%s₂, Ho2, Hp2⟩
+  rw [← hloc] at *
+  iexists (s₁ + s₂)
+  have hq : RwPos.ofQp (q₁ + q₂) = RwPos.ofQp q₁ + RwPos.ofQp q₂ := RwPos.ofQp_add ..
+  have hs : RwPos.ofQp (s₁ + s₂) = RwPos.ofQp s₁ + RwPos.ofQp s₂ := RwPos.ofQp_add ..
+  simp only [hs, hq, rwFrag_op, Auth.frag_op]
+  isplitl [Ho1 Ho2]
+  · iapply (BI.entails_wand iOwn_op.mpr)
+    isplitl [Ho1]
+    · iexact Ho1
+    · iexact Ho2
+  · iapply (BI.entails_wand (pointsTo_split (GF := GF) g₁.lock.data s₁ s₂ v).2)
+    isplitl [Hp1]
+    · iexact Hp1
+    · iexact Hp2
+
 /-- Two locks cannot both be described: `isRwLock` owns the counter cell. -/
 theorem isRwLock_exclusive (γ : GName) (lk : Handle T) (s₁ s₂ : LockState) (v₁ v₂ : T) :
     iprop(isRwLock γ lk s₁ v₁ ∗ isRwLock γ lk s₂ v₂) ⊢@{IProp GF} iprop(False) := by
@@ -1760,6 +1817,7 @@ noncomputable instance instRwLockAPI : RwLockAPI GF Hd m where
 
   isRwLock_exclusive := isRwLock_exclusive
   readGuardFrac_split := readGuardFrac_split
+  readGuardFrac_combine := readGuardFrac_combine
   readGuardFrac_state := readGuardFrac_state
   readGuardFrac_agree := readGuardFrac_agree
   writeGuard_state := writeGuard_state
