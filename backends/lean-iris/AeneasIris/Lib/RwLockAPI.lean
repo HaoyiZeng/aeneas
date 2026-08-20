@@ -52,8 +52,11 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
     RwLock T → ITree E (WriteGuard T × (WriteGuard T → ITree E Unit))
   read_deref {T : Type} : ReadGuard T → ITree E T
   write_deref {T : Type} : WriteGuard T → ITree E T
+  /-- The second backward function ends the borrow the guard holds on the lock,
+  which `deref_mut` only passes through -- so it returns what it was given, and
+  is pure.  Releasing is `drop`'s job, not this one's. -/
   write_deref_mut {T : Type} : WriteGuard T →
-    ITree E (T × (T → ITree E (WriteGuard T)) × (WriteGuard T → ITree E (WriteGuard T)))
+    ITree E (T × (T → ITree E (WriteGuard T)) × (WriteGuard T → WriteGuard T))
 
   /-- The lock itself, at abstract state `s` holding `v`. -/
   isRwLock {T : Type} : GName → RwLock T → LockState → T → IProp GF
@@ -175,7 +178,7 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
   `⦃ ⦄` does not nest inside an `iprop`. -/
   write_deref_mut_spec {T : Type} (γ : GName) (g : WriteGuard T) (v : T) (M : CoPset) :
     ⦃ writeGuard γ g v ⦄ (write_deref_mut g) @ Hd ; m ; M
-    ⦃ r, ∃ set back, ⌜r = (v, set, back)⌝ ∗
+    ⦃ r, ∃ set, ⌜r = (v, set, fun g' => g')⌝ ∗
         writeGuard γ g v ∗
         □ (∀ v₀ : T, ∀ v' : T, writeGuard γ g v₀ -∗
              wpi_mask GF Hd m (set v')

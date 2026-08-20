@@ -106,10 +106,10 @@ noncomputable def write_deref (g : WriteGuard T) : ITree E T :=
   HeapAPI.load g.lock.data
 
 noncomputable def write_deref_mut (g : WriteGuard T) :
-    ITree E (T × (T → ITree E (WriteGuard T)) × (WriteGuard T → ITree E (WriteGuard T))) :=
+    ITree E (T × (T → ITree E (WriteGuard T)) × (WriteGuard T → WriteGuard T)) :=
   ITree.bind (HeapAPI.load (E := E) g.lock.data) (fun v =>
     .ret (v, (fun w => ITree.bind (HeapAPI.store g.lock.data w) (fun _ => .ret g)),
-             (fun g' => .ret g')))
+             (fun g' => g')))
 
 /-- Plain, like allocation: dropping demands the lock be free and owned, so no
 other thread holds a reference and there is nothing to synchronise with.  A
@@ -1360,7 +1360,7 @@ theorem read_deref_spec (γ : GName) (g : ReadGuard T) (q : Qp) (v : T) (M : CoP
 
 theorem write_deref_mut_spec (γ : GName) (g : WriteGuard T) (v : T) (M : CoPset) :
     ⦃ writeGuard γ g v ⦄ (write_deref_mut (E := E) g) @ Hd ; m ; M
-    ⦃ r, ∃ st bk, ⌜r = (v, st, bk)⌝ ∗
+    ⦃ r, ∃ st, ⌜r = (v, st, fun g' => g')⌝ ∗
         writeGuard γ g v ∗
         □ (∀ v₀ : T, ∀ v' : T, writeGuard γ g v₀ -∗
              wpi_mask GF Hd m (st v')

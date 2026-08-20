@@ -439,10 +439,10 @@ noncomputable def write_deref (g : WriteGuard T) : ITree E T :=
 
 /-- `DerefMut for RwLockWriteGuard`. -/
 noncomputable def write_deref_mut (g : WriteGuard T) :
-    ITree E (T × (T → ITree E (WriteGuard T)) × (WriteGuard T → ITree E (WriteGuard T))) :=
+    ITree E (T × (T → ITree E (WriteGuard T)) × (WriteGuard T → WriteGuard T)) :=
   ITree.bind (load (E := E) g.lock.data) (fun v =>
     .ret (v, (fun w => ITree.bind (store g.lock.data w) (fun _ => .ret g)),
-             (fun g' => .ret g')))
+             (fun g' => g')))
 
 /-- `Drop for RwLockReadGuard`. -/
 noncomputable def read_drop (g : ReadGuard T) : ITree E (ReadGuard T × ITree E Unit) :=
@@ -1748,7 +1748,7 @@ theorem read_deref_spec (γ : GName) (g : ReadGuard T) (q : Qp) (v : T) (M : CoP
 /-- **`write_deref_mut`.** Mirrors `write_deref_mut_spec`. -/
 theorem write_deref_mut_spec (γ : GName) (g : WriteGuard T) (v : T) (M : CoPset) :
     ⦃ writeGuard γ g v ⦄ (write_deref_mut (E := E) g) @ Hd ; m ; M
-    ⦃ r, ∃ set back, ⌜r = (v, set, back)⌝ ∗
+    ⦃ r, ∃ set, ⌜r = (v, set, fun g' => g')⌝ ∗
         writeGuard γ g v ∗
         □ (∀ v₀ : T, ∀ v' : T, writeGuard γ g v₀ -∗
              wpi_mask GF Hd m (set v')
@@ -1761,7 +1761,6 @@ theorem write_deref_mut_spec (γ : GName) (g : WriteGuard T) (v : T) (M : CoPset
   istep
   iret
   iexists (fun w => ITree.bind (store g.lock.data w) (fun _ => ITree.ret g))
-  iexists (fun g' => ITree.ret g')
   isplitr
   itrivial
   isplitl [Hd Hl]
