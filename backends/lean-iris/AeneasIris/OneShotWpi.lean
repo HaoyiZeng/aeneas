@@ -181,7 +181,7 @@ of a one-shot triple, exactly as `iinv h with ⟨pat, cl⟩` does, and additiona
 shrinks the mask to the `∅` the update asks for.  `cl` re-closes the invariant and
 `bk` restores the mask; once the operation's resource has been handed back,
 discharge them in that order — `imod bk`, then `iapply cl`. -/
-macro "iinv_atomic " h:ident " with " pat:icasesPat " back " bk:ident : tactic =>
+macro "iinv_atomic " h:ident " with " pat:icasesPat &" back " bk:ident : tactic =>
   `(tactic|
     (iinv $h:ident with $pat
      imod (Iris.fupd_mask_subseteq (E2 := (∅ : CoPset))
