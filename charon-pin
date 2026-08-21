@@ -6,4 +6,4 @@
 # only exists there. The upstream CI helpers scripts/ci-check-charon-pin-is-*.sh
 # check that the pin is merged upstream and will therefore fail; that is
 # expected and harmless for this fork.
-0026ca78f8c3c2beb2762c7c64588a52529853d5
+9229cf0b2470f39fe4e82cfbf2dfeb0b48a0068f
