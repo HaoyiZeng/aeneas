@@ -43,6 +43,7 @@ package «tests» {}
 @[default_target] lean_lib HigherRankedTraitBounds
 @[default_target] lean_lib Into
 @[default_target] lean_lib Issue1044OpaqueTuple
+@[default_target] lean_lib Issue1138SlicePositivity
 @[default_target] lean_lib Issue1140GlobalLoop
 @[default_target] lean_lib Issue1141ImplFnRef
 @[default_target] lean_lib Issue134LoopSharedBorrows
@@ -98,3 +99,4 @@ package «tests» {}
 @[default_target] lean_lib Traits
 @[default_target] lean_lib Tutorial
 @[default_target] lean_lib Vec
+@[default_target] lean_lib VecIter
