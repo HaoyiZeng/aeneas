@@ -167,6 +167,28 @@ theorem Vec.insert_spec {α : Type u} (v: Vec α) (i: Usize) (x: α)
   v.insert i x ⦃ nv => nv.val = v.val.set i x ⦄ := by
   simp [insert, *]
 
+/-- `Vec::remove` takes the element out and shifts the rest left; it panics if
+    the index is out of bounds.  The result is shorter, so the length bound is
+    inherited. -/
+@[rust_fun "alloc::vec::{alloc::vec::Vec<@T>}::remove" (keepParams := [true, false])]
+def Vec.remove {α : Type u} (v : Vec α) (i : Usize) : Result (α × Vec α) :=
+  match v.val[i.val]? with
+  | none => fail arrayOutOfBounds
+  | some x =>
+    ok (x, .from (v.val.eraseIdx i.val) (by
+      have h1 := v.property
+      have h2 : (v.val.eraseIdx i.val).length ≤ v.val.length := by
+        simp [List.length_eraseIdx]; grind
+      grind))
+
+@[step]
+theorem Vec.remove_spec {α : Type u} (v : Vec α) (i : Usize)
+  (hbound : i.val < v.length) :
+  v.remove i ⦃ x nv => x = v.val[i.val] ∧ nv.val = v.val.eraseIdx i.val ⦄ := by
+  simp only [remove]
+  rw [List.getElem?_eq_getElem hbound]
+  simp
+
 def Vec.index_usize {α : Type u} (v: Vec α) (i: Usize) : Result α :=
   match v[i.val]? with
   | none => fail .arrayOutOfBounds
