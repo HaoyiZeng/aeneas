@@ -103,6 +103,38 @@ theorem iSpec_of_IASpec {Hd : Handler Eff GF} {m : Mode} {Pre : IProp GF}
       · iexact Hβ
       · iexact HPost
 
+/-- **Strengthen the atomic postcondition with a fact read off the
+precondition.**  A caller that can extract a pure `Q x` from `α x` -- without
+consuming it -- may add anything `Q x` implies to `β`.
+
+This is what composes two refinements.  The lower layer's spec says the state
+becomes `σ'`; the upper layer's simulation says `abstract σ` steps to
+`abstract σ'`, but only for well-formed `σ`.  Well-formedness is exactly a pure
+fact about the state the precondition already owns, so this lemma turns the one
+spec into the other. -/
+theorem IASpec_strengthen {Hd : Handler Eff GF} {m : Mode} {Pre : IProp GF}
+    {t : ITree Eff V} {E : CoPset} {α : A → IProp GF} {β β' : A → B → IProp GF}
+    {POST : A → B → P → IProp GF} {f : A → B → P → V} {Q : A → Prop}
+    (h : IASpec Hd m Pre t E α β POST f)
+    (hQ : ∀ x, α x ⊢ iprop(α x ∗ ⌜Q x⌝))
+    (hβ : ∀ x y, Q x → (β x y ⊢ β' x y)) :
+    IASpec Hd m Pre t E α β' POST f := by
+  unfold IASpec at h ⊢
+  iintro %Φ HPre HAU
+  ihave Hspec := h
+  iapply Hspec $$ %Φ HPre
+  imod HAU with H
+  icases H with ⟨%x, Hα, Hback⟩
+  ihave Hα' := hQ x $$ Hα
+  icases Hα' with ⟨Hα, %hq⟩
+  imodintro
+  iexists x
+  isplitl [Hα]
+  · iexact Hα
+  · iintro %y Hβ
+    ihave Hβ' := hβ x y hq $$ Hβ
+    iapply Hback $$ %y Hβ'
+
 /-- `IASpec` as an entailment, which is the shape `irule` can apply: the ordinary
 precondition is framed out of the context and the update is left as a goal. -/
 theorem IASpec.wand {Hd : Handler Eff GF} {m : Mode} {Pre : IProp GF}
