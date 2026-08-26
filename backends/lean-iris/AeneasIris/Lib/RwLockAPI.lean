@@ -8,6 +8,7 @@ namespace AeneasIris
 
 open Iris BI Aeneas.Data.Coinductive
 open AeneasIris.AtomicWpi
+open Aeneas.Std (Loc)
 
 /-- The abstract state of a lock: free, `n + 1` readers, or one writer. -/
 inductive LockState
@@ -26,6 +27,36 @@ theorem LockState.word_injective :
   intro a b h
   cases a <;> cases b <;> simp_all [AeneasIris.LockState.word] <;> grind
 
+/-! ## The carriers
+
+Declared here rather than in an implementation, for the reason `ArcAPI` gives:
+a client type that recurses through one needs an inductive head at the recursive
+occurrence, and the kernel's positivity check will accept neither an `abbrev`
+alias nor a field of the class.
+
+`T` is phantom in all three: a lock is two locations, a guard is a lock. -/
+
+/-- Model of `my_std::RwLock<T>`. -/
+structure RwLock (T : Type) where
+  state : Loc
+  data : Loc
+deriving DecidableEq, Repr
+
+/-- Model of `my_std::RwLockReadGuard<'_, T>`. -/
+structure ReadGuard (T : Type) where
+  lock : RwLock T
+deriving DecidableEq, Repr
+
+/-- Model of `my_std::RwLockWriteGuard<'_, T>`. Distinct from `ReadGuard`. -/
+structure WriteGuard (T : Type) where
+  lock : RwLock T
+deriving DecidableEq, Repr
+
+/-- The guard a successful acquire on `lk` hands back. -/
+def mkReadGuard {T : Type} (lk : RwLock T) : ReadGuard T := ⟨lk⟩
+
+def mkWriteGuard {T : Type} (lk : RwLock T) : WriteGuard T := ⟨lk⟩
+
 section Interface
 
 variable {hlc : Iris.HasLC}
@@ -36,20 +67,14 @@ predicates, and the laws relating them.
 Generic in the effect row `E`, the handler `Hd` and the `Mode`, so a client
 programs against the interface at whatever language it is itself written in.
 
-The carriers are type *constructors*, as `RwLock<T>` is in Rust: one
-implementation serves every `T`, rather than one instance per `T`.
-
-They are fields rather than parameters because they are not independent choices:
-an implementation supplies all three together, and no client should be able to
-pair one implementation's lock with another's guard.  Instance search therefore
-runs on `GF`, `Hd` and `m` alone, which is also what lets `new` -- whose result
-type is the lock -- elaborate without an annotation. -/
+The carriers are not fields: `RwLock`, `ReadGuard` and `WriteGuard` are declared
+above, and every implementation uses those.  What an implementation is free to
+choose is the protocol -- the ghost state, and where the interference points
+fall -- not the shape of the lock.  Instance search therefore runs on `GF`, `Hd`
+and `m` alone, which is also what lets `new` -- whose result type is the lock --
+elaborate without an annotation. -/
 class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
     {E : Effect.{1}} (Hd : Handler E GF) (m : Mode) where
-  RwLock : Type → Type
-  ReadGuard : Type → Type
-  WriteGuard : Type → Type
-
   new {T : Type} : T → ITree E (RwLock T)
   drop {T : Type} : RwLock T → ITree E Unit
   try_read {T : Type} :

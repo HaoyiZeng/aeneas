@@ -26,6 +26,7 @@ being an atomic. -/
 namespace AeneasIris.RwLockImpl
 
 open Iris BI Aeneas.Data.Coinductive
+open AeneasIris (RwLock ReadGuard WriteGuard mkReadGuard mkWriteGuard)
 open AeneasIris AeneasIris.AtomicHeapAPI
 open Aeneas.Std (StateE StepE Loc Val RustHeap)
 open scoped Aeneas.Std
@@ -349,27 +350,6 @@ class RwSpinG (GF : BundledGFunctors) where
 
 attribute [reducible, instance] RwSpinG.rwSpinG
 
-/-- Model of `my_std::RwLock<T>`. -/
-structure Handle (T : Type) where
-  state : Loc
-  data : Loc
-deriving DecidableEq, Repr
-
-/-- Model of `my_std::RwLockReadGuard<'_, T>`. -/
-structure ReadGuard (T : Type) where
-  lock : Handle T
-deriving DecidableEq, Repr
-
-/-- Model of `my_std::RwLockWriteGuard<'_, T>`. Distinct from `ReadGuard`. -/
-structure WriteGuard (T : Type) where
-  lock : Handle T
-deriving DecidableEq, Repr
-
-/-- The guard a successful acquire on `lk` hands back. -/
-def mkReadGuard (lk : Handle T) : ReadGuard T := ⟨lk⟩
-
-def mkWriteGuard (lk : Handle T) : WriteGuard T := ⟨lk⟩
-
 section Code
 
 variable {E : Effect.{1}} [StateE RustHeap.{0} -< E] [StepE.{1} -< E]
@@ -377,7 +357,7 @@ variable [Aeneas.Std.FailE.{1} -< E]
 variable [Aeneas.Std.ConcE.{1} -< E]
 variable {T : Type}
 
-noncomputable def new (v : T) : ITree E (Handle T) := do
+noncomputable def new (v : T) : ITree E (RwLock T) := do
   let d ← HeapAPI.alloc v
   let s ← HeapAPI.alloc (0 : Int)
   return ⟨s, d⟩
@@ -387,7 +367,7 @@ the same as finding the lock held for writing: `RwLockAPI` asks that a `try_read
 succeed whenever the lock is not write-locked, and only a retry delivers that
 once the load and the swap are separated by an interference point.  Rust retries
 here for the same reason, and gives up only on seeing the lock held. -/
-noncomputable def try_read_acquire (lk : Handle T) : ITree E (Option (ReadGuard T)) :=
+noncomputable def try_read_acquire (lk : RwLock T) : ITree E (Option (ReadGuard T)) :=
   ITree.iter (fun _ => do
     let n : Int ← load lk.state
     if n < 0 then
@@ -396,7 +376,7 @@ noncomputable def try_read_acquire (lk : Handle T) : ITree E (Option (ReadGuard 
       let ok ← cas lk.state n (n + 1)
       if ok then return .inr (some ⟨lk⟩) else return .inl ()) ()
 
-noncomputable def try_write_acquire (lk : Handle T) : ITree E (Option (WriteGuard T)) := do
+noncomputable def try_write_acquire (lk : RwLock T) : ITree E (Option (WriteGuard T)) := do
   let ok ← cas lk.state (0 : Int) (-1)
   if ok then return some ⟨lk⟩ else return none
 
@@ -404,7 +384,7 @@ noncomputable def try_write_acquire (lk : Handle T) : ITree E (Option (WriteGuar
 reader that finds the lock held both do the same thing, which is to go round
 again.  No `Conc.sync` either -- the load it goes back to is an atomic access,
 so the yield is already there. -/
-noncomputable def read_acquire (lk : Handle T) : ITree E (ReadGuard T) :=
+noncomputable def read_acquire (lk : RwLock T) : ITree E (ReadGuard T) :=
   ITree.iter (fun _ => do
     let n : Int ← load lk.state
     if n < 0 then
@@ -413,7 +393,7 @@ noncomputable def read_acquire (lk : Handle T) : ITree E (ReadGuard T) :=
       let ok ← cas lk.state n (n + 1)
       if ok then return .inr (⟨lk⟩ : ReadGuard T) else return .inl ()) ()
 
-noncomputable def write_acquire (lk : Handle T) : ITree E (WriteGuard T) :=
+noncomputable def write_acquire (lk : RwLock T) : ITree E (WriteGuard T) :=
   AeneasIris.Conc.waitUntil (try_write_acquire (E := E) lk)
 
 /-- Releasing a read lock is a decrement, so it is one atomic operation and not a
@@ -426,21 +406,21 @@ noncomputable def read_release (g : ReadGuard T) : ITree E Unit := do
 noncomputable def write_release (g : WriteGuard T) : ITree E Unit :=
   store g.lock.state (0 : Int)
 
-noncomputable def try_read (lk : Handle T) :
+noncomputable def try_read (lk : RwLock T) :
     ITree E (Option (ReadGuard T × (ReadGuard T → ITree E Unit))) :=
   ITree.bind (try_read_acquire (E := E) lk)
     (fun r => .ret (r.map (fun g => (g, read_release))))
 
-noncomputable def try_write (lk : Handle T) :
+noncomputable def try_write (lk : RwLock T) :
     ITree E (Option (WriteGuard T × (WriteGuard T → ITree E Unit))) :=
   ITree.bind (try_write_acquire (E := E) lk)
     (fun r => .ret (r.map (fun g => (g, write_release))))
 
-noncomputable def read (lk : Handle T) :
+noncomputable def read (lk : RwLock T) :
     ITree E (ReadGuard T × (ReadGuard T → ITree E Unit)) :=
   ITree.bind (read_acquire (E := E) lk) (fun g => .ret (g, read_release))
 
-noncomputable def write (lk : Handle T) :
+noncomputable def write (lk : RwLock T) :
     ITree E (WriteGuard T × (WriteGuard T → ITree E Unit)) :=
   ITree.bind (write_acquire (E := E) lk) (fun g => .ret (g, write_release))
 
@@ -459,7 +439,7 @@ noncomputable def write_deref_mut (g : WriteGuard T) :
 /-- Plain, like allocation: dropping demands the lock be free and owned, so no
 other thread holds a reference and there is nothing to synchronise with.  A
 yield here would also be unusable, since it needs the full mask. -/
-noncomputable def drop (lk : Handle T) : ITree E Unit := do
+noncomputable def drop (lk : RwLock T) : ITree E Unit := do
   let _ ← HeapAPI.free lk.data
   HeapAPI.free lk.state
 
@@ -484,7 +464,7 @@ def rwCore (γ : GName) (c : Loc) : LockState → T → IProp GF
   | .write, _ => iprop(iOwn (F := RwSpinF) γ (● rwAuth c none) ∗
       iOwn (F := RwSpinF) γ (◯ rwLocR c))
 
-def isRwLock (γ : GName) (lk : Handle T) (s : LockState) (v : T) : IProp GF :=
+def isRwLock (γ : GName) (lk : RwLock T) (s : LockState) (v : T) : IProp GF :=
   iprop(lk.state ↦ s.word ∗ rwCore γ lk.data s v)
 
 /-- `&mut T` is exactly the contents cell. -/
@@ -513,7 +493,7 @@ instance rwCore_timeless (γ : GName) (c : Loc) (s : LockState) (v : T) :
     infer_instance
   · unfold rwCore; infer_instance
 
-instance isRwLock_timeless (γ : GName) (lk : Handle T) (s : LockState) (v : T) :
+instance isRwLock_timeless (γ : GName) (lk : RwLock T) (s : LockState) (v : T) :
     Timeless (PROP := IProp GF) (isRwLock γ lk s v) := by
   unfold isRwLock; infer_instance
 
@@ -638,7 +618,7 @@ theorem readGuardFrac_combine (γ : GName) (g₁ g₂ : ReadGuard T)
     · iexact Hp2
 
 /-- Two locks cannot both be described: `isRwLock` owns the counter cell. -/
-theorem isRwLock_exclusive (γ : GName) (lk : Handle T) (s₁ s₂ : LockState) (v₁ v₂ : T) :
+theorem isRwLock_exclusive (γ : GName) (lk : RwLock T) (s₁ s₂ : LockState) (v₁ v₂ : T) :
     iprop(isRwLock γ lk s₁ v₁ ∗ isRwLock γ lk s₂ v₂) ⊢@{IProp GF} iprop(False) := by
   iintro ⟨H1, H2⟩
   simp only [isRwLock] at *
@@ -649,7 +629,7 @@ theorem isRwLock_exclusive (γ : GName) (lk : Handle T) (s₁ s₂ : LockState) 
   exact absurd rfl hne
 
 /-- A read permit pins the lock to a read state. -/
-theorem readGuardFrac_state (γ : GName) (lk : Handle T) (s : LockState)
+theorem readGuardFrac_state (γ : GName) (lk : RwLock T) (s : LockState)
     (g : ReadGuard T) (q : Qp) (v v' : T) :
     iprop(isRwLock γ lk s v ∗ readGuardFrac γ g q v') ⊢@{IProp GF} iprop(⌜∃ n, s = .read n⌝) := by
   rcases s with _ | n | _
@@ -678,7 +658,7 @@ theorem readGuardFrac_state (γ : GName) (lk : Handle T) (s : LockState)
     exact (rwFrag_not_none hv).elim
 
 /-- ... and agrees with it on the contents. -/
-theorem readGuardFrac_agree (γ : GName) (lk : Handle T) (s : LockState)
+theorem readGuardFrac_agree (γ : GName) (lk : RwLock T) (s : LockState)
     (g : ReadGuard T) (q : Qp) (v v' : T) :
     iprop(isRwLock γ lk s v ∗ readGuardFrac γ g q v') ⊢@{IProp GF} iprop(⌜v = v'⌝) := by
   rcases s with _ | n | _
@@ -722,7 +702,7 @@ theorem readGuardFrac_agree (γ : GName) (lk : Handle T) (s : LockState)
     exact (rwFrag_not_none hv).elim
 
 /-- A write guard pins the lock to the write state. -/
-theorem writeGuard_state (γ : GName) (lk : Handle T) (s : LockState)
+theorem writeGuard_state (γ : GName) (lk : RwLock T) (s : LockState)
     (g : WriteGuard T) (v v' : T) :
     iprop(isRwLock γ lk s v ∗ writeGuard γ g v') ⊢@{IProp GF} iprop(⌜s = .write⌝) := by
   rcases s with _ | n | _
@@ -758,7 +738,7 @@ theorem writeGuard_state (γ : GName) (lk : Handle T) (s : LockState)
 
 /-- `writeGuard_state` in wand form, so a caller can read the state off without
 having to assemble the two sides into a `∗` first. -/
-theorem writeGuard_state_wand (γ : GName) (lk : Handle T) (s : LockState)
+theorem writeGuard_state_wand (γ : GName) (lk : RwLock T) (s : LockState)
     (g : WriteGuard T) (v v' : T) :
     ⊢@{IProp GF} isRwLock γ lk s v -∗ writeGuard γ g v' -∗ ⌜s = .write⌝ := by
   iintro H1 H2
@@ -1051,7 +1031,7 @@ theorem write_release_spec (γ : GName) (g : WriteGuard T) (v₁ : T) :
     iapply HΨ $$ %()
 
 omit [Aeneas.Std.FailE -< E] in
-theorem try_write_acquire_spec (γ : GName) (lk : Handle T) :
+theorem try_write_acquire_spec (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd m (try_write_acquire (E := E) lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk (if s = .free then .write else s) v
         | RET (if s = .free then some (mkWriteGuard lk) else none)
@@ -1124,7 +1104,7 @@ theorem try_write_acquire_spec (γ : GName) (lk : Handle T) :
       simp only [Aeneas.Std.Val.unpackO_pack, Option.some.injEq] at h2
       exact hs (LockState.word_injective (show s.word = LockState.free.word from h2))
 
-theorem try_write_spec (γ : GName) (lk : Handle T) :
+theorem try_write_spec (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd m (try_write (E := E) lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk (if s = .free then .write else s) v
         | g rel, RET (if s = .free then some (g, rel) else none)
@@ -1216,7 +1196,7 @@ theorem try_write_spec (γ : GName) (lk : Handle T) :
 
 variable [AeneasIris.Step.stepH GF .part -<ₕ Hd]
 
-theorem write_spec (γ : GName) (lk : Handle T) :
+theorem write_spec (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd .part (write (E := E) lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk .write v ∗ ⌜s = .free⌝
         | g rel, RET (g, rel)
@@ -1424,7 +1404,7 @@ theorem read_release_spec (γ : GName) (g : ReadGuard T) (v : T) :
       · iexact HR
     ihave %hbad := readGuardFrac_state γ g.lock LockState.write g 1 v v $$ Hpair
     exact absurd hbad (by rintro ⟨k, hk⟩; cases hk)
-private theorem read_release_box (γ : GName) (lk : Handle T) (v : T) :
+private theorem read_release_box (γ : GName) (lk : RwLock T) (v : T) :
     ⊢@{IProp GF} □ (readGuardFrac γ (⟨lk⟩ : ReadGuard T) 1 v -∗
       ⟪ ∀ s', isRwLock γ lk s' v ⟫
           Hd .part (read_release (E := E) (⟨lk⟩ : ReadGuard T)) @ (∅ : CoPset)
@@ -1440,7 +1420,7 @@ private theorem read_release_box (γ : GName) (lk : Handle T) (v : T) :
 /-- The read acquisition on its own: it retries a lost swap and reports only a
 lock held for writing.  Both `try_read` and the blocking `read` are this plus a
 continuation. -/
-private theorem try_read_acquire_spec (γ : GName) (lk : Handle T) :
+private theorem try_read_acquire_spec (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫
         Hd Mode.part (try_read_acquire (E := E) lk) @ (∅ : CoPset)
       ⟪ isRwLock γ lk (match s with
@@ -1634,7 +1614,7 @@ private theorem try_read_acquire_spec (γ : GName) (lk : Handle T) :
       iret
       iapply HΨ $$ %(⟨lk⟩ : ReadGuard T)
       itrivial
-theorem try_read_spec (γ : GName) (lk : Handle T) :
+theorem try_read_spec (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd Mode.part (try_read (E := E) lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk (match s with
                          | .free => .read 0
@@ -1864,7 +1844,7 @@ theorem try_read_spec (γ : GName) (lk : Handle T) :
       iret
       iapply HΨ $$ %((⟨lk⟩, read_release) : ReadGuard T × (ReadGuard T → ITree E Unit))
       itrivial
-theorem read_spec (γ : GName) (lk : Handle T) :
+theorem read_spec (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd .part (read (E := E) lk) @ (∅ : CoPset)
         ⟪ (isRwLock γ lk (.read 0) v ∗ ⌜s = .free⌝) ∨
           (∃ k : Nat, isRwLock γ lk (.read (k + 1)) v ∗ ⌜s = .read k⌝)
@@ -2120,7 +2100,7 @@ theorem write_deref_mut_spec (γ : GName) (g : WriteGuard T) (v : T) (M : CoPset
     itrivial
     iframe
 
-theorem drop_spec (γ : GName) (lk : Handle T) (v : T) (M : CoPset) :
+theorem drop_spec (γ : GName) (lk : RwLock T) (v : T) (M : CoPset) :
     ⦃ isRwLock γ lk .free v ⦄ (drop (E := E) lk) @ Hd ; m ; M
     ⦃ r, ⌜r = ()⌝ ⦄ := by
   show _ ⊢ _
@@ -2139,9 +2119,6 @@ The archived plain-heap implementation supplies a `def` at the same
 `try_read` retries, which is what reading the state and swapping it separately
 costs once something may happen in between. -/
 noncomputable instance instRwLockAPI : RwLockAPI GF Hd Mode.part where
-  RwLock := Handle
-  ReadGuard := ReadGuard
-  WriteGuard := WriteGuard
 
   new := new
   drop := drop

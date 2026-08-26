@@ -8,6 +8,33 @@ namespace AeneasIris
 
 open Iris BI Aeneas.Data.Coinductive
 open AeneasIris.AtomicWpi
+open Aeneas.Std (Loc)
+
+/-! ## The carriers
+
+An `Arc<T>` is a pointer to a control block; these say what that pointer is, and
+nothing about the protocol on the counts.  They are declared here rather than in
+an implementation because they are what a client's *types* are built from -- and
+because a client type that recurses through one, as `Capability` does, needs an
+inductive head at the recursive occurrence.  The kernel's positivity check is
+syntactic: neither an `abbrev` alias nor a field of `ArcAPI` would do.
+
+`T` is phantom in both: a handle is three locations, whatever it points at.  It
+is kept as an index anyway, so that a handle to one thing cannot be passed where
+a handle to another is expected. -/
+
+/-- Model of `my_std::Arc<T>`. -/
+structure Arc (T : Type) where
+  strong : Loc
+  weak : Loc
+  data : Loc
+deriving DecidableEq, Repr
+
+/-- Model of `my_std::Weak<T>`. -/
+inductive Weak (T : Type)
+  | dangling
+  | live (a : Arc T)
+deriving DecidableEq
 
 section Interface
 
@@ -19,12 +46,13 @@ predicates, and the laws relating them.
 Generic in the effect row `E`, the handler `Hd` and the `Mode`, so a client
 programs against the interface at whatever language it is itself written in.
 
-The carriers are fields, not parameters: an implementation supplies both
-together, and no client should be able to pair one implementation's `Arc` with
-another's `Weak`.  They are type *constructors*, so they read as `Arc T` does in
-Rust -- but unlike `RwLockAPI` the class still fixes one `T`, because the ghost
-state stores the payload (`ArcMeta T = LeibnizO (Arc T × T)`) and so `ArcG GF T`
-is per-`T`; a single `GF` cannot supply it for every `T`.
+The carriers are not fields: `Arc` and `Weak` are declared above, and every
+implementation uses those.  What an implementation is free to choose is the
+protocol -- the ghost state, the counting discipline, whether the counts are
+atomic -- not the shape of the pointer.  The class still fixes one `T`, unlike
+`RwLockAPI`, because the ghost state stores the payload
+(`ArcMeta T = LeibnizO (Arc T × T)`) and so `ArcG GF T` is per-`T`; a single
+`GF` cannot supply it for every `T`.
 
 The shared resource is `arcAuth γ n k` -- the control block and the two counts --
 and every operation that moves a count is stated as an atomic triple against it.
@@ -33,13 +61,9 @@ needs nothing shared, which is the whole point of an `Arc`.
 
 Weak references come in two kinds, and which spec applies is decided by the
 *resource* a client holds, `isWeak γ w v` or `isDanglingWeak w`, never by
-inspecting `w`. So there is no law saying what shape a `Weak T` may take: an
-implementation is free to represent one however it likes. -/
+inspecting `w` -- even though `w`'s shape is now visible, no law mentions it. -/
 class ArcAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
     {E : Effect.{1}} (Hd : Handler E GF) (m : Mode) (T : Type) where
-  Arc : Type → Type
-  Weak : Type → Type
-
   new : T → ITree E (Arc T)
   deref : Arc T → ITree E T
   strong_count : Arc T → ITree E Int
