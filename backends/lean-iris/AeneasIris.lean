@@ -18,8 +18,11 @@ import AeneasIris.Lib.RwLockImpl
 
 import AeneasIris.Lib.ArcAPI
 import AeneasIris.Lib.ArcImpl
-import AeneasIris.Lib.AtomicArcImpl
-import AeneasIris.Lib.AtomicRwLockImpl
+import AeneasIris.Lib.Archive.Rc
+/- The plain (non-atomic) `RwLock` moved to `attic/RwLockPlain.lean`, out of the
+   library glob: it implements the pre-`Option` shape of `try_read`/`try_write`,
+   which `RwLockAPI` no longer asks for.  Kept as a reference, to be revived or
+   deleted rather than quietly rotting in the build. -/
 
 import AeneasIris.Tests.Basic
 import AeneasIris.Tests.Zoo

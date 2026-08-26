@@ -30,6 +30,109 @@ section Interface
 
 variable {hlc : Iris.HasLC}
 
+/-! ## Release obligations
+
+`write` and `try_write` owe their release closure the same thing, and so do
+`read` and `try_read`; only the argument the closure is applied to differs
+(`g` versus `some g`).  Naming the obligation is not just tidiness: stating it
+four times over left the class field and the implementing theorem as two
+structurally equal but distinct terms, and unifying them at the instance
+declaration timed out `isDefEq`.  With one definition on both sides the check
+is a matter of matching a head symbol. -/
+
+section Obligations
+variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF] {E : Effect.{1}}
+variable (Hd : Handler E GF) (m : Mode)
+
+/-- Hand the guard back, and the lock is `.free` holding whatever the guard
+carried; the state found is reported rather than demanded, so a caller holding
+only the update has nothing left to prove. -/
+@[reducible] def WriteReleases {L W T : Type}
+    (isRwLock : GName → L → LockState → T → IProp GF)
+    (writeGuard : GName → W → T → IProp GF)
+    (γ : GName) (lk : L) (g : W) (rel : ITree E Unit) : IProp GF :=
+  iprop(□ (∀ v₁ : T, writeGuard γ g v₁ -∗
+    ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫ Hd m rel @ (∅ : CoPset)
+      ⟪ isRwLock γ lk .free v₁ ∗ ⌜s' = .write⌝ | RET () ⟫))
+
+/-- Hand a full read share back, and the reader count drops by one -- to
+`.free` if it was the last. -/
+@[reducible] def ReadReleases {L R T : Type}
+    (isRwLock : GName → L → LockState → T → IProp GF)
+    (readGuardFrac : GName → R → Qp → T → IProp GF)
+    (γ : GName) (lk : L) (g : R) (v : T) (rel : ITree E Unit) : IProp GF :=
+  iprop(□ (readGuardFrac γ g 1 v -∗
+    ⟪ ∀ s', isRwLock γ lk s' v ⟫ Hd m rel @ (∅ : CoPset)
+      ⟪ (isRwLock γ lk .free v ∗ ⌜s' = .read 0⌝) ∨
+        (∃ n : Nat, isRwLock γ lk (.read n) v ∗ ⌜s' = .read (n + 1)⌝)
+      | RET () ⟫))
+
+/-! Unfolding lemmas.  The definitions exist to keep the class field and the
+implementing theorem a single term; clients that were written against the
+spelled-out form should not have to care, so `simp` puts it back. -/
+
+@[simp] theorem WriteReleases_def {L W T : Type}
+    (isRwLock : GName → L → LockState → T → IProp GF)
+    (writeGuard : GName → W → T → IProp GF)
+    (γ : GName) (lk : L) (g : W) (rel : ITree E Unit) :
+    WriteReleases Hd m isRwLock writeGuard γ lk g rel
+      = iprop(□ (∀ v₁ : T, writeGuard γ g v₁ -∗
+          ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫ Hd m rel @ (∅ : CoPset)
+            ⟪ isRwLock γ lk .free v₁ ∗ ⌜s' = .write⌝ | RET () ⟫)) := rfl
+
+@[simp] theorem ReadReleases_def {L R T : Type}
+    (isRwLock : GName → L → LockState → T → IProp GF)
+    (readGuardFrac : GName → R → Qp → T → IProp GF)
+    (γ : GName) (lk : L) (g : R) (v : T) (rel : ITree E Unit) :
+    ReadReleases Hd m isRwLock readGuardFrac γ lk g v rel
+      = iprop(□ (readGuardFrac γ g 1 v -∗
+          ⟪ ∀ s', isRwLock γ lk s' v ⟫ Hd m rel @ (∅ : CoPset)
+            ⟪ (isRwLock γ lk .free v ∗ ⌜s' = .read 0⌝) ∨
+              (∃ n : Nat, isRwLock γ lk (.read n) v ∗ ⌜s' = .read (n + 1)⌝)
+            | RET () ⟫)) := rfl
+
+/-- Both obligations are `□`, so callers may `icases` them out as persistent
+without unfolding first. -/
+instance WriteReleases_persistent {L W T : Type}
+    (isRwLock : GName → L → LockState → T → IProp GF)
+    (writeGuard : GName → W → T → IProp GF)
+    (γ : GName) (lk : L) (g : W) (rel : ITree E Unit) :
+    Persistent (WriteReleases Hd m isRwLock writeGuard γ lk g rel) := by
+  unfold WriteReleases; infer_instance
+
+instance ReadReleases_persistent {L R T : Type}
+    (isRwLock : GName → L → LockState → T → IProp GF)
+    (readGuardFrac : GName → R → Qp → T → IProp GF)
+    (γ : GName) (lk : L) (g : R) (v : T) (rel : ITree E Unit) :
+    Persistent (ReadReleases Hd m isRwLock readGuardFrac γ lk g v rel) := by
+  unfold ReadReleases; infer_instance
+
+/-- What a `try_write` hands back: nothing but the reason it failed, or the
+guard together with its release obligation.  Named for the same reason as
+`WriteReleases`. -/
+@[reducible] def TryWriteResult {L W T : Type}
+    (isRwLock : GName → L → LockState → T → IProp GF)
+    (writeGuard : GName → W → T → IProp GF)
+    (γ : GName) (lk : L) (s : LockState) (v : T)
+    (og : Option W) (rel : Option W → ITree E Unit) : IProp GF :=
+  match og with
+  | none => iprop(⌜s ≠ .free⌝)
+  | some g => iprop(⌜s = .free⌝ ∗ writeGuard γ g v ∗
+      WriteReleases Hd m isRwLock writeGuard γ lk g (rel (some g)))
+
+/-- The `try_read` counterpart. -/
+@[reducible] def TryReadResult {L R T : Type}
+    (isRwLock : GName → L → LockState → T → IProp GF)
+    (readGuardFrac : GName → R → Qp → T → IProp GF)
+    (γ : GName) (lk : L) (s : LockState) (v : T)
+    (og : Option R) (rel : Option R → ITree E Unit) : IProp GF :=
+  match og with
+  | none => iprop(⌜s = .write⌝)
+  | some g => iprop(⌜s ≠ .write⌝ ∗ readGuardFrac γ g 1 v ∗
+      ReadReleases Hd m isRwLock readGuardFrac γ lk g v (rel (some g)))
+
+end Obligations
+
 /-- A reader/writer lock over `T`, as a menu of operations, three abstract
 predicates, and the laws relating them.
 
@@ -52,10 +155,14 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
 
   new {T : Type} : T → ITree E (RwLock T)
   drop {T : Type} : RwLock T → ITree E Unit
+  /-- The `Option` is on the guard alone, and the closure is beside it rather
+  than inside it: `try_read` borrows the lock whether or not it acquires, so
+  there is always exactly one borrow to end, and its final value is what may or
+  may not hold a guard. -/
   try_read {T : Type} :
-    RwLock T → ITree E (Option (ReadGuard T × (ReadGuard T → ITree E Unit)))
+    RwLock T → ITree E (Option (ReadGuard T) × (Option (ReadGuard T) → ITree E Unit))
   try_write {T : Type} :
-    RwLock T → ITree E (Option (WriteGuard T × (WriteGuard T → ITree E Unit)))
+    RwLock T → ITree E (Option (WriteGuard T) × (Option (WriteGuard T) → ITree E Unit))
   read {T : Type} :
     RwLock T → ITree E (ReadGuard T × (ReadGuard T → ITree E Unit))
   write {T : Type} :
@@ -121,30 +228,21 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
   try_write_spec {T : Type} (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd m (try_write lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk (if s = .free then .write else s) v
-        | g rel, RET (if s = .free then some (g, rel) else none)
-        ; if s = .free then
-            writeGuard γ g v ∗
-            □ (∀ v₁ : T, writeGuard γ g v₁ -∗
-                 ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫ Hd m (rel g) @ (∅ : CoPset)
-                   ⟪ isRwLock γ lk .free v₁ ∗ ⌜s' = .write⌝ | RET () ⟫)
-          else emp ⟫
+        | og rel, RET (og, rel)
+        ; ⌜rel none = ITree.ret ()⌝ ∗
+          TryWriteResult Hd m isRwLock writeGuard γ lk s v og rel ⟫
 
   /-- Releasing a read guard retries its decrement, so its closure is stated at
   `.part` even though acquiring did not have to block. -/
   try_read_spec {T : Type} (γ : GName) (lk : RwLock T) :
-    ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd m (try_read lk) @ (∅ : CoPset)
+    ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd .part (try_read lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk (match s with
                          | .free => .read 0
                          | .read n => .read (n + 1)
                          | .write => .write) v
-        | g rel, RET (if s = .write then none else some (g, rel))
-        ; if s = .write then emp else
-            readGuardFrac γ g 1 v ∗
-            □ (readGuardFrac γ g 1 v -∗
-                 ⟪ ∀ s', isRwLock γ lk s' v ⟫ Hd .part (rel g) @ (∅ : CoPset)
-                   ⟪ (isRwLock γ lk .free v ∗ ⌜s' = .read 0⌝) ∨
-                     (∃ n : Nat, isRwLock γ lk (.read n) v ∗ ⌜s' = .read (n + 1)⌝)
-                   | RET () ⟫) ⟫
+        | og rel, RET (og, rel)
+        ; ⌜rel none = ITree.ret ()⌝ ∗
+          TryReadResult Hd .part isRwLock readGuardFrac γ lk s v og rel ⟫
 
   /-- Blocking acquires spin, so they are only partially correct: a thread that
   never wins the race owes nothing.
@@ -160,9 +258,7 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
         ⟪ isRwLock γ lk .write v ∗ ⌜s = .free⌝
         | g rel, RET (g, rel)
         ; writeGuard γ g v ∗
-          □ (∀ v₁ : T, writeGuard γ g v₁ -∗
-               ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫ Hd .part (rel g) @ (∅ : CoPset)
-                   ⟪ isRwLock γ lk .free v₁ ∗ ⌜s' = .write⌝ | RET () ⟫) ⟫
+          WriteReleases Hd .part isRwLock writeGuard γ lk g (rel g) ⟫
 
   read_spec {T : Type} (γ : GName) (lk : RwLock T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd .part (read lk) @ (∅ : CoPset)
@@ -170,11 +266,7 @@ class RwLockAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
           (∃ k : Nat, isRwLock γ lk (.read (k + 1)) v ∗ ⌜s = .read k⌝)
         | g rel, RET (g, rel)
         ; readGuardFrac γ g 1 v ∗
-          □ (readGuardFrac γ g 1 v -∗
-               ⟪ ∀ s', isRwLock γ lk s' v ⟫ Hd .part (rel g) @ (∅ : CoPset)
-                   ⟪ (isRwLock γ lk .free v ∗ ⌜s' = .read 0⌝) ∨
-                     (∃ n : Nat, isRwLock γ lk (.read n) v ∗ ⌜s' = .read (n + 1)⌝)
-                   | RET () ⟫) ⟫
+          ReadReleases Hd .part isRwLock readGuardFrac γ lk g v (rel g) ⟫
 
   write_deref_spec {T : Type} (γ : GName) (g : WriteGuard T) (v : T) (M : CoPset) :
     ⦃ writeGuard γ g v ⦄ (write_deref g) @ Hd ; m ; M

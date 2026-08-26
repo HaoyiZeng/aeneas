@@ -426,15 +426,32 @@ noncomputable def read_release (g : ReadGuard T) : ITree E Unit := do
 noncomputable def write_release (g : WriteGuard T) : ITree E Unit :=
   store g.lock.state (0 : Int)
 
+/-! ## Ending the borrow
+
+`try_read` and `try_write` borrow the lock whether or not they acquire it, so
+what a caller is handed back is the closure that *ends that borrow*, applied to
+the borrow's final value.  Hence `Option ReadGuard → _` rather than
+`ReadGuard → _`, and hence a closure that does not depend on whether the
+acquisition succeeded: it reads its own argument.
+
+Ending a successful borrow with `none` is `mem::forget`.  It is a no-op here
+too, and the caller is left holding a guard resource it can never spend. -/
+
+noncomputable def read_release_back : Option (ReadGuard T) → ITree E Unit
+  | none => .ret ()
+  | some g => read_release g
+
+noncomputable def write_release_back : Option (WriteGuard T) → ITree E Unit
+  | none => .ret ()
+  | some g => write_release g
+
 noncomputable def try_read (lk : Handle T) :
-    ITree E (Option (ReadGuard T × (ReadGuard T → ITree E Unit))) :=
-  ITree.bind (try_read_acquire (E := E) lk)
-    (fun r => .ret (r.map (fun g => (g, read_release))))
+    ITree E (Option (ReadGuard T) × (Option (ReadGuard T) → ITree E Unit)) :=
+  ITree.bind (try_read_acquire (E := E) lk) (fun r => .ret (r, read_release_back))
 
 noncomputable def try_write (lk : Handle T) :
-    ITree E (Option (WriteGuard T × (WriteGuard T → ITree E Unit))) :=
-  ITree.bind (try_write_acquire (E := E) lk)
-    (fun r => .ret (r.map (fun g => (g, write_release))))
+    ITree E (Option (WriteGuard T) × (Option (WriteGuard T) → ITree E Unit)) :=
+  ITree.bind (try_write_acquire (E := E) lk) (fun r => .ret (r, write_release_back))
 
 noncomputable def read (lk : Handle T) :
     ITree E (ReadGuard T × (ReadGuard T → ITree E Unit)) :=
@@ -1127,14 +1144,9 @@ theorem try_write_acquire_spec (γ : GName) (lk : Handle T) :
 theorem try_write_spec (γ : GName) (lk : Handle T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd m (try_write (E := E) lk) @ (∅ : CoPset)
         ⟪ isRwLock γ lk (if s = .free then .write else s) v
-        | g rel, RET (if s = .free then some (g, rel) else none)
-        ; if s = .free then
-            writeGuard γ g v ∗
-            □ (∀ v₁ : T, writeGuard γ g v₁ -∗
-                 ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫
-                     Hd m (rel g) @ (∅ : CoPset)
-                   ⟪ isRwLock γ lk .free v₁ ∗ ⌜s' = .write⌝ | RET () ⟫)
-          else emp ⟫ := by
+        | og rel, RET (og, rel)
+        ; ⌜rel none = ITree.ret ()⌝ ∗
+          TryWriteResult Hd m isRwLock writeGuard γ lk s v og rel ⟫ := by
   simp only [atomicWpi]
   iintro %Φ HAU
   simp only [try_write, try_write_acquire]
@@ -1162,25 +1174,29 @@ theorem try_write_spec (γ : GName) (lk : Handle T) :
         · iexact Hauth
         · iexact Hloc
     · iintro HΨ
-      simp only [reduceIte, AtomicWpi.wandM_some]
+      simp only [AtomicWpi.wandM_some]
       istep
       ihave HG : writeGuard γ ⟨lk⟩ v $$ [Hdata]
       · iunfold writeGuard
         isplitl [Hdata]
         · iexact Hdata
         · iexact Hloc
-      have hite : ∀ (y : WriteGuard T) (z : WriteGuard T → ITree E Unit),
-          (if LockState.free = LockState.free then some (y, z) else none)
-            = some (y, z) := fun _ _ => rfl
-      simp only [Option.map_some, hite]
-      iapply HΨ $$ %((⟨lk⟩ : WriteGuard T), write_release (E := E))
-      isplitl [HG]
-      · iexact HG
-      · iintro !> %v₁ HG₁
-        have HR := write_release_spec (Hd := Hd) (m := m) γ (⟨lk⟩ : WriteGuard T) v₁
-        simp only [atomicWpi] at HR
-        iapply HR
-        iexact HG₁
+      iapply HΨ $$ %((some (⟨lk⟩ : WriteGuard T)), write_release_back (E := E))
+      isplitr [HG]
+      · ipureintro; rfl
+      simp only [TryWriteResult]
+      · isplitr [HG]
+        · ipureintro; trivial
+        · simp only [write_release_back]
+          isplitl [HG]
+          · iexact HG
+          · simp only [WriteReleases, write_release_back]
+            iintro !> %v₁ HG₁
+            have HR := write_release_spec (Hd := Hd) (m := m) γ (⟨lk⟩ : WriteGuard T) v₁
+            simp only [atomicWpi] at HR
+            simp only [atomicWpi]
+            iapply HR
+            iexact HG₁
   · irule with HeapAPI.cas_fail_body_spec
     · simp only [Bool.false_eq_true, if_false]
       istep
@@ -1201,13 +1217,11 @@ theorem try_write_spec (γ : GName) (lk : Handle T) :
       · iintro HΨ
         simp only [AtomicWpi.wandM_some]
         istep
-        have hite : ∀ (y : WriteGuard T) (z : WriteGuard T → ITree E Unit),
-            (if s = LockState.free then some (y, z) else none) = none :=
-          fun _ _ => if_neg hs
-        simp only [Option.map_none, hite]
-        iapply HΨ $$ %((⟨lk⟩ : WriteGuard T), write_release (E := E))
-        simp only [if_neg hs]
-        itrivial
+        iapply HΨ $$ %((none : Option (WriteGuard T)), write_release_back (E := E))
+        isplitr []
+        · ipureintro; rfl
+        simp only [TryWriteResult]
+        · ipureintro; exact hs
     · intro h
       have h2 := congrArg (fun w : Aeneas.Std.Val.{0} => Aeneas.Std.Val.unpackO Int w) h
       simp only [Aeneas.Std.Val.unpackO_pack, Option.some.injEq] at h2
@@ -1221,9 +1235,7 @@ theorem write_spec (γ : GName) (lk : Handle T) :
         ⟪ isRwLock γ lk .write v ∗ ⌜s = .free⌝
         | g rel, RET (g, rel)
         ; writeGuard γ g v ∗
-          □ (∀ v₁ : T, writeGuard γ g v₁ -∗
-               ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫ Hd .part (rel g) @ (∅ : CoPset)
-                   ⟪ isRwLock γ lk .free v₁ ∗ ⌜s' = .write⌝ | RET () ⟫) ⟫ := by
+          WriteReleases Hd .part isRwLock writeGuard γ lk g (rel g) ⟫ := by
   simp only [atomicWpi]
   iintro %Φ HAU
   simp only [write, write_acquire]
@@ -1272,9 +1284,11 @@ theorem write_spec (γ : GName) (lk : Handle T) :
       iapply HΨ $$ %((⟨lk⟩ : WriteGuard T), write_release (E := E))
       isplitl [HG]
       · iexact HG
-      · iintro !> %v₁ HG₁
+      · simp only [WriteReleases]
+        iintro !> %v₁ HG₁
         have HR := write_release_spec (Hd := Hd) (m := Mode.part) γ (⟨lk⟩ : WriteGuard T) v₁
         simp only [atomicWpi] at HR
+        simp only [atomicWpi]
         iapply HR
         iexact HG₁
   · irule with HeapAPI.cas_fail_body_spec
@@ -1640,15 +1654,9 @@ theorem try_read_spec (γ : GName) (lk : Handle T) :
                          | .free => .read 0
                          | .read n => .read (n + 1)
                          | .write => .write) v
-        | g rel, RET (if s = .write then none else some (g, rel))
-        ; if s = .write then emp else
-            readGuardFrac γ g 1 v ∗
-            □ (readGuardFrac γ g 1 v -∗
-                 ⟪ ∀ s', isRwLock γ lk s' v ⟫
-                     Hd .part (rel g) @ (∅ : CoPset)
-                   ⟪ (isRwLock γ lk .free v ∗ ⌜s' = .read 0⌝) ∨
-                     (∃ n : Nat, isRwLock γ lk (.read n) v ∗ ⌜s' = .read (n + 1)⌝)
-                   | RET () ⟫) ⟫ := by
+        | og rel, RET (og, rel)
+        ; ⌜rel none = ITree.ret ()⌝ ∗
+          TryReadResult Hd .part isRwLock readGuardFrac γ lk s v og rel ⟫ := by
   simp only [atomicWpi]
   iintro %Φ HAU
   simp only [try_read, try_read_acquire]
@@ -1710,27 +1718,27 @@ theorem try_read_spec (γ : GName) (lk : Handle T) :
             have hne2 : ∀ P : IProp GF,
                 (if LockState.free = LockState.write then iprop(emp) else P) = P :=
               fun _ => if_neg (by intro h; cases h)
-            simp only [hne1, hne2, AtomicWpi.wandM_some, Option.map]
+            simp only [AtomicWpi.wandM_some]
             iret
             iret
             iret
-            iapply HΨ $$ %((⟨lk⟩ : ReadGuard T), read_release (E := E))
+            iapply HΨ $$ %((some (⟨lk⟩ : ReadGuard T)), read_release_back (E := E))
+            isplitr [Hfrag]
+            · ipureintro; rfl
+            simp only [TryReadResult]
+            isplitr [Hfrag]
+            · ipureintro; trivial
             isplitl [Hfrag]
             · iunfold readGuardFrac
               iexists sq
               simp only [RwPos.ofQp_one]
               iunfold rdFrag at Hfrag
               iexact Hfrag
-            · have hproj :
-                  ((((⟨lk⟩ : ReadGuard T), read_release (E := E)) :
-                      ReadGuard T × (ReadGuard T → ITree E Unit)).2
-                    (((⟨lk⟩ : ReadGuard T), read_release (E := E)) :
-                      ReadGuard T × (ReadGuard T → ITree E Unit)).1)
-                  = read_release (E := E) (⟨lk⟩ : ReadGuard T) := rfl
+            · simp only [ReadReleases, read_release_back]
               iintro !> HRG
-              rw [hproj]
               have HRR := read_release_spec (Hd := Hd) γ (⟨lk⟩ : ReadGuard T) v₂
               simp only [atomicWpi] at HRR
+              simp only [atomicWpi]
               iapply HRR
               iexact HRG
       · iapply (HeapAPI.wpi_cas_fail (Hd := Hd) (m := Mode.part) (E := E) lk.state
@@ -1804,23 +1812,23 @@ theorem try_read_spec (γ : GName) (lk : Handle T) :
             iret
             iret
             iret
-            iapply HΨ $$ %((⟨lk⟩ : ReadGuard T), read_release (E := E))
+            iapply HΨ $$ %((some (⟨lk⟩ : ReadGuard T)), read_release_back (E := E))
+            isplitr [Hfrag]
+            · ipureintro; rfl
+            simp only [TryReadResult]
+            isplitr [Hfrag]
+            · ipureintro; simp
             isplitl [Hfrag]
             · iunfold readGuardFrac
               iexists sq
               simp only [RwPos.ofQp_one]
               iunfold rdFrag at Hfrag
               iexact Hfrag
-            · have hproj :
-                  ((((⟨lk⟩ : ReadGuard T), read_release (E := E)) :
-                      ReadGuard T × (ReadGuard T → ITree E Unit)).2
-                    (((⟨lk⟩ : ReadGuard T), read_release (E := E)) :
-                      ReadGuard T × (ReadGuard T → ITree E Unit)).1)
-                  = read_release (E := E) (⟨lk⟩ : ReadGuard T) := rfl
+            · simp only [ReadReleases, read_release_back]
               iintro !> HRG
-              rw [hproj]
               have HRR := read_release_spec (Hd := Hd) γ (⟨lk⟩ : ReadGuard T) v₂
               simp only [atomicWpi] at HRR
+              simp only [atomicWpi]
               iapply HRR
               iexact HRG
       · iapply (HeapAPI.wpi_cas_fail (Hd := Hd) (m := Mode.part) (E := E) lk.state
@@ -1862,19 +1870,18 @@ theorem try_read_spec (γ : GName) (lk : Handle T) :
       iret
       simp only [hret, AtomicWpi.wandM_some, Option.map_none]
       iret
-      iapply HΨ $$ %((⟨lk⟩, read_release) : ReadGuard T × (ReadGuard T → ITree E Unit))
-      itrivial
+      iapply HΨ $$ %((none : Option (ReadGuard T)), read_release_back (E := E))
+      isplitr []
+      · ipureintro; rfl
+      simp only [TryReadResult]
+      · ipureintro; trivial
 theorem read_spec (γ : GName) (lk : Handle T) :
     ⊢ ⟪ ∀ s v, isRwLock γ lk s v ⟫ Hd .part (read (E := E) lk) @ (∅ : CoPset)
         ⟪ (isRwLock γ lk (.read 0) v ∗ ⌜s = .free⌝) ∨
           (∃ k : Nat, isRwLock γ lk (.read (k + 1)) v ∗ ⌜s = .read k⌝)
         | g rel, RET (g, rel)
         ; readGuardFrac γ g 1 v ∗
-          □ (readGuardFrac γ g 1 v -∗
-               ⟪ ∀ s', isRwLock γ lk s' v ⟫ Hd .part (rel g) @ (∅ : CoPset)
-                   ⟪ (isRwLock γ lk .free v ∗ ⌜s' = .read 0⌝) ∨
-                     (∃ n : Nat, isRwLock γ lk (.read n) v ∗ ⌜s' = .read (n + 1)⌝)
-                   | RET () ⟫) ⟫ := by
+          ReadReleases Hd .part isRwLock readGuardFrac γ lk g v (rel g) ⟫ := by
   rw [atomicWpi]
   iintro %Φ HAU
   simp only [read, read_acquire]
@@ -1944,9 +1951,11 @@ theorem read_spec (γ : GName) (lk : Handle T) :
               simp only [RwPos.ofQp_one]
               iunfold rdFrag at Hfrag
               iexact Hfrag
-            · iintro !> HRG
-              dsimp only
+            · simp only [ReadReleases]
+              iintro !> HRG
               have HRR := read_release_spec (Hd := Hd) γ (⟨lk⟩ : ReadGuard T) v₂
+              simp only [atomicWpi] at HRR
+              simp only [atomicWpi]
               iapply HRR
               iexact HRG
       · iapply (HeapAPI.wpi_cas_fail (Hd := Hd) (m := Mode.part) (E := E) lk.state
@@ -2025,9 +2034,11 @@ theorem read_spec (γ : GName) (lk : Handle T) :
               simp only [RwPos.ofQp_one]
               iunfold rdFrag at Hfrag
               iexact Hfrag
-            · iintro !> HRG
-              dsimp only
+            · simp only [ReadReleases]
+              iintro !> HRG
               have HRR := read_release_spec (Hd := Hd) γ (⟨lk⟩ : ReadGuard T) v₂
+              simp only [atomicWpi] at HRR
+              simp only [atomicWpi]
               iapply HRR
               iexact HRG
       · iapply (HeapAPI.wpi_cas_fail (Hd := Hd) (m := Mode.part) (E := E) lk.state
