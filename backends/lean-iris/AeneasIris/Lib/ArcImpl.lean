@@ -15,7 +15,6 @@ unseal Aeneas.Std.Result
 namespace AeneasIris.ArcImpl
 
 open Iris BI Aeneas.Data.Coinductive
-open AeneasIris (Arc Weak)
 open AeneasIris AeneasIris.AtomicHeapAPI
 open Aeneas.Std (StateE StepE Loc Val RustHeap)
 open scoped Aeneas.Std
@@ -24,6 +23,17 @@ open Iris.CMRA Iris.OFE
 open scoped Iris
 
 
+structure Handle (T : Type) where
+  strong : Loc
+  weak : Loc
+  data : Loc
+deriving DecidableEq, Repr
+
+inductive WeakHandle (T : Type)
+  | dangling
+  | live (h : Handle T)
+deriving DecidableEq
+
 section Code
 
 variable {E : Effect.{1}} [StateE RustHeap.{0} -< E] [StepE.{1} -< E]
@@ -31,27 +41,27 @@ variable [Aeneas.Std.FailE.{1} -< E]
 variable [Aeneas.Std.ConcE.{1} -< E]
 variable {T : Type}
 
-noncomputable def new (x : T) : ITree E (Arc T) := do
+noncomputable def new (x : T) : ITree E (Handle T) := do
   let s ← HeapAPI.alloc (1 : Int)
   let w ← HeapAPI.alloc (1 : Int)
   let d ← HeapAPI.alloc x
   return ⟨s, w, d⟩
 
-noncomputable def deref (a : Arc T) : ITree E T :=
+noncomputable def deref (a : Handle T) : ITree E T :=
   HeapAPI.load a.data
 
-noncomputable def strong_count (a : Arc T) : ITree E Int :=
+noncomputable def strong_count (a : Handle T) : ITree E Int :=
   load a.strong
 
-noncomputable def clone (a : Arc T) : ITree E (Arc T) := do
+noncomputable def clone (a : Handle T) : ITree E (Handle T) := do
   let _ ← faa a.strong (1 : Int)
   return a
 
-noncomputable def downgrade (a : Arc T) : ITree E (Weak T) := do
+noncomputable def downgrade (a : Handle T) : ITree E (WeakHandle T) := do
   let _ ← faa a.weak (1 : Int)
   return .live a
 
-noncomputable def drop_strong (a : Arc T) : ITree E Unit := do
+noncomputable def drop_strong (a : Handle T) : ITree E Unit := do
   let old : Int ← faa a.strong (-1)
   if old = 1 then
     let _ ← free a.data
@@ -59,16 +69,16 @@ noncomputable def drop_strong (a : Arc T) : ITree E Unit := do
   else
     return ()
 
-def weak_new : Weak T := .dangling
+def weak_new : WeakHandle T := .dangling
 
-noncomputable def weak_clone (w : Weak T) : ITree E (Weak T) :=
+noncomputable def weak_clone (w : WeakHandle T) : ITree E (WeakHandle T) :=
   match w with
   | .dangling => ITree.ret .dangling
   | .live a => do
       let _ ← faa a.weak (1 : Int)
       return .live a
 
-noncomputable def weak_drop (w : Weak T) : ITree E Unit :=
+noncomputable def weak_drop (w : WeakHandle T) : ITree E Unit :=
   match w with
   | .dangling => ITree.ret ()
   | .live a => do
@@ -81,7 +91,7 @@ noncomputable def weak_drop (w : Weak T) : ITree E Unit :=
 
 /-- The retry is real here: the count may change between the load and the
 compare-and-swap, so both are interference points. -/
-noncomputable def try_upgrade (a : Arc T) : ITree E (Option (Arc T)) :=
+noncomputable def try_upgrade (a : Handle T) : ITree E (Option (Handle T)) :=
   ITree.iter (fun _ => do
     let n : Int ← load a.strong
     if n = 0 then
@@ -90,12 +100,12 @@ noncomputable def try_upgrade (a : Arc T) : ITree E (Option (Arc T)) :=
       let ok ← cas a.strong n (n + 1)
       if ok then return .inr (some a) else return .inl ()) ()
 
-noncomputable def weak_upgrade (w : Weak T) : ITree E (Option (Arc T)) :=
+noncomputable def weak_upgrade (w : WeakHandle T) : ITree E (Option (Handle T)) :=
   match w with
   | .dangling => ITree.ret none
   | .live a => try_upgrade a
 
-noncomputable def weak_strong_count (w : Weak T) : ITree E Int :=
+noncomputable def weak_strong_count (w : WeakHandle T) : ITree E Int :=
   match w with
   | .dangling => ITree.ret 0
   | .live a => load a.strong
@@ -185,7 +195,7 @@ variable {T : Type}
 
 /-- The control block. At `0, 0` the whole allocation is gone, so there are no
 cells left to own -- which is why every spec first has to rule that case out. -/
-def physical (a : Arc T) : Nat → Nat → IProp GF
+def physical (a : Handle T) : Nat → Nat → IProp GF
   | 0, 0 => iprop(emp)
   | 0, (w + 1) => iprop(a.strong ↦ (0 : Int) ∗ a.weak ↦ ((w : Int) + 1))
   | (n + 1), w => iprop(a.strong ↦ ((n : Int) + 1) ∗ a.weak ↦ ((w : Int) + 1))
@@ -205,7 +215,7 @@ theorem wcell_one_zero : wcell 1 0 = 1 := by decide
 theorem wcell_of_ne (n n₂ k : Nat) (h : n ≠ 0) (h₂ : n₂ ≠ 0) : wcell n k = wcell n₂ k := by
   unfold wcell; simp only [if_neg h, if_neg h₂]
 
-theorem physical_split (a : Arc T) (n k : Nat) (h : n = 0 → 1 ≤ k) :
+theorem physical_split (a : Handle T) (n k : Nat) (h : n = 0 → 1 ≤ k) :
     physical (GF := GF) a n k = iprop(a.strong ↦ (n : Int) ∗ a.weak ↦ wcell n k) := by
   cases n
   · obtain ⟨k', rfl⟩ : ∃ k', k = k' + 1 := ⟨k - 1, by have := h rfl; grind⟩
@@ -213,7 +223,7 @@ theorem physical_split (a : Arc T) (n k : Nat) (h : n = 0 → 1 ≤ k) :
   · simp only [physical, wcell, Nat.cast_add, Nat.cast_one,
       if_neg (Nat.succ_ne_zero _)]
 
-abbrev ArcMeta (T : Type) := LeibnizO (Arc T × T)
+abbrev ArcMeta (T : Type) := LeibnizO (Handle T × T)
 abbrev ArcShare := Option (Qp × PosNat)
 abbrev ArcRes (T : Type) :=
   ULift.{1} (Option (Agree (ArcMeta T)) × (Credit × (Credit × ArcShare)))
@@ -228,7 +238,7 @@ section Ghost
 variable [ArcG GF T]
 
 /-- Agreement, one credit per reference, and the strong share with its count. -/
-def res (md : Option (Arc T × T)) (n w : Nat) (s : ArcShare) : ArcRes T :=
+def res (md : Option (Handle T × T)) (n w : Nat) (s : ArcShare) : ArcRes T :=
   ULift.up (md.map (fun x => toAgree (LeibnizO.mk x)), (n, (w, s)))
 
 /-- The share slot is `none` exactly when no strong reference is left. -/
@@ -237,7 +247,7 @@ def shareOf : Nat → Qp → ArcShare
   | m + 1, q => some (q, PosNat.ofSucc m)
 
 /-- What the authority keeps of the payload cell: the complement of `qs`. -/
-def payloadOf (a : Arc T) (v : T) : Nat → Qp → IProp GF
+def payloadOf (a : Handle T) (v : T) : Nat → Qp → IProp GF
   | 0, _ => iprop(emp)
   | _ + 1, qs => iprop(∃ qrest : Qp, ⌜qs + qrest = (1 : Qp)⌝ ∗
       pointsTo a.data (DFrac.own qrest) v)
@@ -250,11 +260,11 @@ theorem shareOf_succ (m : Nat) (q : Qp) :
 @[simp] theorem shareOf_zero (q : Qp) : shareOf 0 q = none := rfl
 
 def arcAuth (γ : GName) (n w : Nat) : IProp GF := iprop(
-  ∃ a : Arc T, ∃ v : T, ∃ qs : Qp,
+  ∃ a : Handle T, ∃ v : T, ∃ qs : Qp,
     physical a n w ∗ payloadOf a v n qs ∗
     iOwn (F := ArcF T) γ (● res (some (a, v)) n w (shareOf n qs)))
 
-def arcMetaOwn (γ : GName) (a : Arc T) (v : T) : IProp GF :=
+def arcMetaOwn (γ : GName) (a : Handle T) (v : T) : IProp GF :=
   iprop(iOwn (F := ArcF T) γ (◯ res (some (a, v)) 0 0 none))
 
 def arcStrongOwn (γ : GName) (q : Qp) : IProp GF :=
@@ -264,18 +274,18 @@ def arcWeakOwn (γ : GName) : IProp GF :=
   iprop(iOwn (F := ArcF T) γ (◯ res (T := T) none 0 1 none))
 
 /-- One strong reference: agreement, a credit carrying `q`, and that share. -/
-def isArc (γ : GName) (a : Arc T) (v : T) : IProp GF :=
+def isArc (γ : GName) (a : Handle T) (v : T) : IProp GF :=
   iprop(∃ q : Qp, arcMetaOwn γ a v ∗ arcStrongOwn (T := T) γ q ∗
     pointsTo a.data (DFrac.own q) v)
 
-def isWeak (γ : GName) : Weak T → T → IProp GF
+def isWeak (γ : GName) : WeakHandle T → T → IProp GF
   | .dangling, _ => iprop(False)
   | .live a, v => iprop(arcMetaOwn γ a v ∗ arcWeakOwn (T := T) γ)
 
 /-- Pure, hence persistent: a dangling handle is a fact, not a permission. -/
-def isDanglingWeak (w : Weak T) : IProp GF := iprop(⌜w = .dangling⌝)
+def isDanglingWeak (w : WeakHandle T) : IProp GF := iprop(⌜w = .dangling⌝)
 
-@[simp] theorem res_op (md : Option (Arc T × T)) (n w n' w' : Nat)
+@[simp] theorem res_op (md : Option (Handle T × T)) (n w n' w' : Nat)
     (s s' : ArcShare) :
     res md n w s • res (T := T) none n' w' s' = res md (n + n') (w + w') (s • s') := by
   cases md <;> rfl
@@ -284,7 +294,7 @@ private theorem credit_lu {N d N' d' : Nat} (h : ∀ z, N = d + z → N' = d' + 
     ((N, d) : Credit × Credit) ~l~> (N', d') :=
   (local_update_unital_discrete N d N' d').mpr (fun z _ he => ⟨trivial, h z he⟩)
 
-private theorem res_lu (md₁ md₂ : Option (Arc T × T)) (N K d e N' K' d' e' : Nat)
+private theorem res_lu (md₁ md₂ : Option (Handle T × T)) (N K d e N' K' d' e' : Nat)
     (S s S' s' : ArcShare)
     (hn : ∀ z, N = d + z → N' = d' + z) (hk : ∀ z, K = e + z → K' = e' + z)
     (hs : ((S, s) : ArcShare × ArcShare) ~l~> (S', s')) :
@@ -317,10 +327,10 @@ private theorem share_dealloc (q : Qp) (zs : ArcShare) :
 
 /-- Given explicitly: synthesis times out looking for it through `ULift`,
 `Option`, `Agree` and the pair. -/
-instance arcMeta_coreId (a : Arc T) (v : T) :
+instance arcMeta_coreId (a : Handle T) (v : T) :
     CMRA.CoreId (res (T := T) (some (a, v)) 0 0 none) := ⟨.rfl⟩
 
-instance arcMetaOwn_persistent (γ : GName) (a : Arc T) (v : T) :
+instance arcMetaOwn_persistent (γ : GName) (a : Handle T) (v : T) :
     Persistent (arcMetaOwn (GF := GF) γ a v) := by
   unfold arcMetaOwn
   infer_instance
@@ -329,7 +339,7 @@ instance arcMetaOwn_persistent (γ : GName) (a : Arc T) (v : T) :
 learn they are not acting on a dead `Arc`, and they learn it from the *linear*
 credit rather than from anything persistent. Read off, like the lock does, by
 combining the two `iOwn`s and projecting `Auth.auth_both_valid`'s inclusion. -/
-theorem arcAuth_strong_pos (γ : GName) (md : Option (Arc T × T)) (n w : Nat)
+theorem arcAuth_strong_pos (γ : GName) (md : Option (Handle T × T)) (n w : Nat)
     (S : ArcShare) (q : Qp) :
     iprop(iOwn (F := ArcF T) γ (● res md n w S) ∗ arcStrongOwn (T := T) γ q)
       ⊢@{IProp GF} iprop(⌜1 ≤ n⌝) := by
@@ -347,7 +357,7 @@ theorem arcAuth_strong_pos (γ : GName) (md : Option (Arc T × T)) (n w : Nat)
   have hn' : n = 1 + zn := hn
   grind
 
-theorem arcAuth_weak_pos (γ : GName) (md : Option (Arc T × T)) (n w : Nat)
+theorem arcAuth_weak_pos (γ : GName) (md : Option (Handle T × T)) (n w : Nat)
     (S : ArcShare) :
     iprop(iOwn (F := ArcF T) γ (● res md n w S) ∗ arcWeakOwn (T := T) γ)
       ⊢@{IProp GF} iprop(⌜1 ≤ w⌝) := by
@@ -368,7 +378,7 @@ theorem arcAuth_weak_pos (γ : GName) (md : Option (Arc T × T)) (n w : Nat)
 /-- The metadata fragment pins down which allocation and payload the ghost name
 denotes: the slot is an `Agree`, so the fragment's entry is included in the
 authority's, and inclusion between `toAgree`s is equality of the carriers. -/
-theorem arcAuth_meta_agree (γ : GName) (a a' : Arc T) (v v' : T) (n w : Nat)
+theorem arcAuth_meta_agree (γ : GName) (a a' : Handle T) (v v' : T) (n w : Nat)
     (S : ArcShare) :
     iprop(iOwn (F := ArcF T) γ (● res (some (a', v')) n w S) ∗ arcMetaOwn γ a v)
       ⊢@{IProp GF} iprop(⌜a' = a ∧ v' = v⌝) := by
@@ -399,7 +409,7 @@ theorem arcAuth_meta_agree (γ : GName) (a a' : Arc T) (v v' : T) (n w : Nat)
   grind
 
 /-- At two or more references the frame exists: it is what the survivors keep. -/
-theorem arcAuth_share_frame (γ : GName) (md : Option (Arc T × T)) (w m : Nat)
+theorem arcAuth_share_frame (γ : GName) (md : Option (Handle T × T)) (w m : Nat)
     (qs q : Qp) :
     iprop(iOwn (F := ArcF T) γ (● res md (m + 1 + 1) w (shareOf (m + 1 + 1) qs)) ∗
         arcStrongOwn (T := T) γ q)
@@ -435,14 +445,14 @@ private theorem keep_pure {P : IProp GF} {φ : Prop} (h : P ⊢ iprop(⌜φ⌝))
     P ⊢ iprop(⌜φ⌝ ∗ P) :=
   (BI.and_intro h .rfl).trans BI.persistent_and_sep_mp
 
-theorem arcAuth_strong_pos_keep (γ : GName) (md : Option (Arc T × T)) (n w : Nat)
+theorem arcAuth_strong_pos_keep (γ : GName) (md : Option (Handle T × T)) (n w : Nat)
     (S : ArcShare) (q : Qp) :
     iprop(iOwn (F := ArcF T) γ (● res md n w S) ∗ arcStrongOwn (T := T) γ q)
       ⊢@{IProp GF} iprop(⌜1 ≤ n⌝ ∗
         (iOwn (F := ArcF T) γ (● res md n w S) ∗ arcStrongOwn (T := T) γ q)) :=
   keep_pure (arcAuth_strong_pos γ md n w S q)
 
-theorem arcAuth_meta_agree_keep (γ : GName) (a a' : Arc T) (v v' : T) (n w : Nat)
+theorem arcAuth_meta_agree_keep (γ : GName) (a a' : Handle T) (v v' : T) (n w : Nat)
     (S : ArcShare) :
     iprop(iOwn (F := ArcF T) γ (● res (some (a', v')) n w S) ∗ arcMetaOwn γ a v)
       ⊢@{IProp GF} iprop(⌜a' = a ∧ v' = v⌝ ∗
@@ -450,7 +460,7 @@ theorem arcAuth_meta_agree_keep (γ : GName) (a a' : Arc T) (v v' : T) (n w : Na
   keep_pure (arcAuth_meta_agree γ a a' v v' n w S)
 
 /-- At one reference the frame must be `none`, so the share is the holder's. -/
-theorem arcAuth_share_agree (γ : GName) (md : Option (Arc T × T)) (n w : Nat)
+theorem arcAuth_share_agree (γ : GName) (md : Option (Handle T × T)) (n w : Nat)
     (qs q : Qp) (hn : n = 1) :
     iprop(iOwn (F := ArcF T) γ (● res md n w (shareOf n qs)) ∗
         arcStrongOwn (T := T) γ q)
@@ -478,7 +488,7 @@ theorem arcAuth_share_agree (γ : GName) (md : Option (Arc T × T)) (n w : Nat)
     have := c.2.pos
     grind
 
-theorem isArc_strong_pos (γ : GName) (a : Arc T) (v : T) (n w : Nat) :
+theorem isArc_strong_pos (γ : GName) (a : Handle T) (v : T) (n w : Nat) :
     iprop(arcAuth (T := T) γ n w ∗ isArc γ a v) ⊢@{IProp GF} iprop(⌜1 ≤ n⌝) := by
   iintro ⟨HAuth, HA⟩
   iunfold arcAuth at HAuth
@@ -490,7 +500,7 @@ theorem isArc_strong_pos (γ : GName) (a : Arc T) (v : T) (n w : Nat) :
   · iexact Hown
   · iexact Hstrong
 
-theorem isWeak_weak_pos (γ : GName) (wh : Weak T) (v : T) (n k : Nat) :
+theorem isWeak_weak_pos (γ : GName) (wh : WeakHandle T) (v : T) (n k : Nat) :
     iprop(arcAuth (T := T) γ n k ∗ isWeak γ wh v) ⊢@{IProp GF} iprop(⌜1 ≤ k⌝) := by
   cases wh
   · simp only [isWeak]
@@ -506,7 +516,7 @@ theorem isWeak_weak_pos (γ : GName) (wh : Weak T) (v : T) (n k : Nat) :
     · iexact Hown
     · iexact Hweak
 
-theorem arc_update (γ : GName) (md₁ md₂ : Option (Arc T × T))
+theorem arc_update (γ : GName) (md₁ md₂ : Option (Handle T × T))
     (N K d e N' K' d' e' : Nat) (S s S' s' : ArcShare)
     (hn : ∀ z, N = d + z → N' = d' + z) (hk : ∀ z, K = e + z → K' = e' + z)
     (hs : ((S, s) : ArcShare × ArcShare) ~l~> (S', s')) :
@@ -518,11 +528,11 @@ theorem arc_update (γ : GName) (md₁ md₂ : Option (Arc T × T))
     (Auth.auth_update (res_lu md₁ md₂ N K d e N' K' d' e' S s S' s' hn hk hs))) ?_
   exact BIUpdate.mono (iOwn_op (GF := GF) (F := ArcF T) (γ := γ)).mp
 
-theorem meta_dup (γ : GName) (a : Arc T) (v : T) :
+theorem meta_dup (γ : GName) (a : Handle T) (v : T) :
     iprop(arcMetaOwn (GF := GF) γ a v) ⊢ iprop(arcMetaOwn γ a v ∗ arcMetaOwn γ a v) :=
   BI.persistent_entails_right .rfl
 
-theorem frag_split (γ : GName) (md : Option (Arc T × T)) (d e d' e' : Nat)
+theorem frag_split (γ : GName) (md : Option (Handle T × T)) (d e d' e' : Nat)
     (s s' : ArcShare) :
     iprop(iOwn (F := ArcF T) γ (◯ res md (d + d') (e + e') (s • s')))
       ⊢@{IProp GF} iprop(iOwn (F := ArcF T) γ (◯ res md d e s) ∗
@@ -533,7 +543,7 @@ theorem frag_split (γ : GName) (md : Option (Arc T × T)) (d e d' e' : Nat)
   exact iOwn_op.mp
 
 /-- Peel the metadata fragment off a strong credit. -/
-theorem frag_split_s (γ : GName) (a : Arc T) (v : T) (q : Qp) :
+theorem frag_split_s (γ : GName) (a : Handle T) (v : T) (q : Qp) :
     iprop(iOwn (F := ArcF T) γ (◯ res (some (a, v)) 1 0 (some (q, 1))))
       ⊢@{IProp GF} iprop(iOwn (F := ArcF T) γ (◯ res (some (a, v)) 0 0 none) ∗
         iOwn (F := ArcF T) γ (◯ res (T := T) none 1 0 (some (q, 1)))) := by
@@ -542,7 +552,7 @@ theorem frag_split_s (γ : GName) (a : Arc T) (v : T) (q : Qp) :
       rw [← Auth.frag_op, res_op]; rfl]
   exact iOwn_op.mp
 
-theorem arc_isArc_facts (γ : GName) (a a' : Arc T) (v v' : T) (n k : Nat)
+theorem arc_isArc_facts (γ : GName) (a a' : Handle T) (v v' : T) (n k : Nat)
     (S : ArcShare) (q : Qp) :
     iprop(iOwn (F := ArcF T) γ (● res (some (a', v')) n k S) ∗ arcMetaOwn γ a v ∗
         arcStrongOwn (T := T) γ q)
@@ -573,7 +583,7 @@ theorem arc_isArc_facts (γ : GName) (a a' : Arc T) (v v' : T) (n k : Nat)
       · iexact Hmeta
       · iexact Hstrong
 
-theorem arc_isWeak_facts (γ : GName) (a a' : Arc T) (v v' : T) (n k : Nat)
+theorem arc_isWeak_facts (γ : GName) (a a' : Handle T) (v v' : T) (n k : Nat)
     (S : ArcShare) :
     iprop(iOwn (F := ArcF T) γ (● res (some (a', v')) n k S) ∗ arcMetaOwn γ a v ∗
         arcWeakOwn (T := T) γ)
@@ -604,7 +614,7 @@ theorem arc_isWeak_facts (γ : GName) (a a' : Arc T) (v v' : T) (n k : Nat)
       · iexact Hmeta
       · iexact Hweak
 
-theorem data_split (a : Arc T) (v : T) (q : Qp) :
+theorem data_split (a : Handle T) (v : T) (q : Qp) :
     iprop(pointsTo (GF := GF) a.data (DFrac.own q) v)
       ⊢@{IProp GF} iprop(pointsTo a.data (DFrac.own q.half) v ∗
         pointsTo a.data (DFrac.own q.half) v) := by
@@ -630,7 +640,7 @@ theorem arcAuth_exclusive (γ : GName) (n₁ w₁ n₂ w₂ : Nat) :
   ipureintro
   exact Auth.auth_op_valid.mp hv
 
-theorem arcMetaOwn_agree (γ : GName) (a : Arc T) (v v' : T) :
+theorem arcMetaOwn_agree (γ : GName) (a : Handle T) (v v' : T) :
     iprop(arcMetaOwn γ a v ∗ arcMetaOwn γ a v') ⊢@{IProp GF} iprop(⌜v = v'⌝) := by
   iintro ⟨H1, H2⟩
   simp only [arcMetaOwn] at *
@@ -650,7 +660,7 @@ theorem arcMetaOwn_agree (γ : GName) (a : Arc T) (v v' : T) :
   have : (a, v) = (a, v') := LeibnizO.dist_inj heq
   grind
 
-theorem isArc_agree (γ : GName) (a : Arc T) (v v' : T) :
+theorem isArc_agree (γ : GName) (a : Handle T) (v v' : T) :
     iprop(isArc γ a v ∗ isArc γ a v') ⊢@{IProp GF} iprop(⌜v = v'⌝) := by
   iintro ⟨H1, H2⟩
   iunfold isArc at H1
@@ -664,7 +674,7 @@ theorem isArc_agree (γ : GName) (a : Arc T) (v v' : T) :
 
 end Ghost
 
-instance (a : Arc T) (n w : Nat) : Timeless (PROP := IProp GF) (physical a n w) := by
+instance (a : Handle T) (n w : Nat) : Timeless (PROP := IProp GF) (physical a n w) := by
   cases n <;> cases w <;> (unfold physical; infer_instance)
 
 section Timeless
@@ -685,22 +695,22 @@ instance arcAuth_timeless (γ : GName) (n w : Nat) :
   · dsimp only [payloadOf]
     infer_instance
 
-instance isArc_timeless (γ : GName) (a : Arc T) (v : T) :
+instance isArc_timeless (γ : GName) (a : Handle T) (v : T) :
     Timeless (PROP := IProp GF) (isArc γ a v) := by
   unfold isArc arcMetaOwn arcStrongOwn
   refine @BI.exists_timeless _ _ _ _ ?_
   intro q
   infer_instance
 
-instance isWeak_timeless (γ : GName) (wh : Weak T) (v : T) :
+instance isWeak_timeless (γ : GName) (wh : WeakHandle T) (v : T) :
     Timeless (PROP := IProp GF) (isWeak γ wh v) := by
   cases wh <;> (unfold isWeak arcMetaOwn arcWeakOwn; infer_instance)
 
-instance isDanglingWeak_persistent (wh : Weak T) :
+instance isDanglingWeak_persistent (wh : WeakHandle T) :
     Persistent (PROP := IProp GF) (isDanglingWeak wh) := by
   unfold isDanglingWeak; infer_instance
 
-theorem isWeak_not_dangling (γ : GName) (wh : Weak T) (v : T) :
+theorem isWeak_not_dangling (γ : GName) (wh : WeakHandle T) (v : T) :
     iprop(isWeak γ wh v ∗ isDanglingWeak wh) ⊢@{IProp GF} iprop(False) := by
   cases wh
   · simp only [isWeak]; iintro ⟨HW, -⟩; iexfalso; iexact HW
@@ -786,28 +796,28 @@ theorem new_spec (v : T) (M : CoPset) :
   iapply (AeneasIris.Step.lat_intro m _)
   iintro %ld Hdata
   imod (iOwn_alloc (GF := GF) (F := ArcF T)
-      ((● res (some ((⟨ls, lw, ld⟩ : Arc T), v)) 1 0 (some ((1 : Qp).half, 1))) •
-        (◯ res (some ((⟨ls, lw, ld⟩ : Arc T), v)) 1 0 (some ((1 : Qp).half, 1))))
+      ((● res (some ((⟨ls, lw, ld⟩ : Handle T), v)) 1 0 (some ((1 : Qp).half, 1))) •
+        (◯ res (some ((⟨ls, lw, ld⟩ : Handle T), v)) 1 0 (some ((1 : Qp).half, 1))))
       (Auth.auth_both_valid_2
         ⟨Agree.toAgree_valid, trivial, trivial,
           (by grind), trivial⟩
         (CMRA.inc_refl _))) with ⟨%γ, Hg⟩
   ihave Hgs : iprop(iOwn (F := ArcF T) γ
-        (● res (some ((⟨ls, lw, ld⟩ : Arc T), v)) 1 0 (some ((1 : Qp).half, 1))) ∗
+        (● res (some ((⟨ls, lw, ld⟩ : Handle T), v)) 1 0 (some ((1 : Qp).half, 1))) ∗
       iOwn (F := ArcF T) γ
-        (◯ res (some ((⟨ls, lw, ld⟩ : Arc T), v)) 1 0 (some ((1 : Qp).half, 1)))) $$ [Hg]
+        (◯ res (some ((⟨ls, lw, ld⟩ : Handle T), v)) 1 0 (some ((1 : Qp).half, 1)))) $$ [Hg]
   · iapply (iOwn_op (GF := GF) (F := ArcF T) (γ := γ)).mp
     iexact Hg
   icases Hgs with ⟨Hown, Hfrag⟩
   ihave Hsplit : iprop(iOwn (F := ArcF T) γ
-        (◯ res (some ((⟨ls, lw, ld⟩ : Arc T), v)) 0 0 none) ∗
+        (◯ res (some ((⟨ls, lw, ld⟩ : Handle T), v)) 0 0 none) ∗
       iOwn (F := ArcF T) γ (◯ res (T := T) none 1 0 (some ((1 : Qp).half, 1)))) $$ [Hfrag]
   · iapply frag_split_s
     iexact Hfrag
   icases Hsplit with ⟨Hmeta, Hstrong⟩
-  ihave HD : iprop(pointsTo (⟨ls, lw, ld⟩ : Arc T).data (DFrac.own (1 : Qp).half) v ∗
-      pointsTo (⟨ls, lw, ld⟩ : Arc T).data (DFrac.own (1 : Qp).half) v) $$ [Hdata]
-  · iapply (data_split (⟨ls, lw, ld⟩ : Arc T) v 1)
+  ihave HD : iprop(pointsTo (⟨ls, lw, ld⟩ : Handle T).data (DFrac.own (1 : Qp).half) v ∗
+      pointsTo (⟨ls, lw, ld⟩ : Handle T).data (DFrac.own (1 : Qp).half) v) $$ [Hdata]
+  · iapply (data_split (⟨ls, lw, ld⟩ : Handle T) v 1)
     iexact Hdata
   icases HD with ⟨Hd1, Hd2⟩
   imodintro
@@ -815,10 +825,10 @@ theorem new_spec (v : T) (M : CoPset) :
   iexists γ
   isplitl [Hs Hw Hd1 Hown]
   · iunfold arcAuth
-    iexists (⟨ls, lw, ld⟩ : Arc T)
+    iexists (⟨ls, lw, ld⟩ : Handle T)
     iexists v
     iexists (1 : Qp).half
-    simp only [physical_split (⟨ls, lw, ld⟩ : Arc T) 1 0 (by grind), wcell_one_zero,
+    simp only [physical_split (⟨ls, lw, ld⟩ : Handle T) 1 0 (by grind), wcell_one_zero,
       Nat.cast_one, shareOf_one]
     isplitl [Hs Hw]
     · isplitl [Hs]
@@ -843,7 +853,7 @@ theorem new_spec (v : T) (M : CoPset) :
       · iexact Hd2
 
 omit [Conc.ConcH GF -<ₕ Hd] in
-theorem deref_spec (γ : GName) (a : Arc T) (v : T) (M : CoPset) :
+theorem deref_spec (γ : GName) (a : Handle T) (v : T) (M : CoPset) :
     ⦃ isArc γ a v ⦄ (deref (E := E) a) @ Hd ; m ; M
     ⦃ r, ⌜r = v⌝ ∗ isArc γ a v ⦄ := by
   show _ ⊢ _
@@ -857,7 +867,7 @@ theorem deref_spec (γ : GName) (a : Arc T) (v : T) (M : CoPset) :
   iexists q
   iframe
 
-theorem strong_count_spec (γ : GName) (a : Arc T) (v : T) :
+theorem strong_count_spec (γ : GName) (a : Handle T) (v : T) :
     ⊢ isArc γ a v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
         Hd m (strong_count (E := E) a) @ (∅ : CoPset)
@@ -919,7 +929,7 @@ theorem strong_count_spec (γ : GName) (a : Arc T) (v : T) :
           · iexact Hdata
 
 
-theorem clone_spec (γ : GName) (a : Arc T) (v : T) :
+theorem clone_spec (γ : GName) (a : Handle T) (v : T) :
     ⊢ isArc γ a v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
         Hd m (clone (E := E) a) @ (∅ : CoPset)
@@ -1037,7 +1047,7 @@ theorem clone_spec (γ : GName) (a : Arc T) (v : T) :
             · iexact Hd2
 
 
-theorem downgrade_spec (γ : GName) (a : Arc T) (v : T) :
+theorem downgrade_spec (γ : GName) (a : Handle T) (v : T) :
     ⊢ isArc γ a v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
         Hd m (downgrade (E := E) a) @ (∅ : CoPset)
@@ -1126,7 +1136,7 @@ theorem downgrade_spec (γ : GName) (a : Arc T) (v : T) :
           iexact Hwk
 
 
-theorem drop_strong_spec (γ : GName) (a : Arc T) (v : T) :
+theorem drop_strong_spec (γ : GName) (a : Handle T) (v : T) :
     ⊢ isArc γ a v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
         Hd m (drop_strong (E := E) a) @ (∅ : CoPset)
@@ -1182,7 +1192,7 @@ theorem drop_strong_spec (γ : GName) (a : Arc T) (v : T) :
           = arcAuth (GF := GF) (T := T) γ 0 (k + 1) := by
         rw [if_pos (show n' + 1 = 1 from by grind), hn1]
       have hret : decide (n' + 1 = 1) = true := by grind
-      have hpost : ∀ z : Weak T,
+      have hpost : ∀ z : WeakHandle T,
           (if n' + 1 = 1 then isWeak (GF := GF) γ z v' else iprop(emp))
             = isWeak γ z v' := fun _ => if_pos (by grind)
       have hsv : ((n' + 1 : Nat) : Int) + -1 = ((0 : Nat) : Int) := by
@@ -1235,7 +1245,7 @@ theorem drop_strong_spec (γ : GName) (a : Arc T) (v : T) :
         · imodintro
           iret
           simp only [hret, hpost, AtomicWpi.wandM_some]
-          iapply HΨ $$ %(Weak.live a')
+          iapply HΨ $$ %(WeakHandle.live a')
           iunfold isWeak
           isplitl [Hmeta]
           · iexact Hmeta
@@ -1256,7 +1266,7 @@ theorem drop_strong_spec (γ : GName) (a : Arc T) (v : T) :
           = arcAuth (GF := GF) (T := T) γ (mm + 1) k := by
         rw [if_neg (show ¬(mm + 1 + 1 = 1) from by grind), Nat.add_sub_cancel]
       have hdec2 : decide (mm + 1 + 1 = 1) = false := by grind
-      have hpost2 : ∀ z : Weak T,
+      have hpost2 : ∀ z : WeakHandle T,
           (if mm + 1 + 1 = 1 then isWeak (GF := GF) γ z v' else iprop(emp)) = iprop(emp) :=
         fun _ => if_neg (by grind)
       have hsh := (share_alloc_eq cq q mm).symm
@@ -1310,11 +1320,11 @@ theorem drop_strong_spec (γ : GName) (a : Arc T) (v : T) :
           push_cast; grind)]
         iret
         simp only [hdec2, hpost2, AtomicWpi.wandM_some]
-        iapply HΨ $$ %(Weak.live a')
+        iapply HΨ $$ %(WeakHandle.live a')
         itrivial
 
 
-theorem weak_clone_spec (γ : GName) (w : Weak T) (v : T) :
+theorem weak_clone_spec (γ : GName) (w : WeakHandle T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
         Hd m (weak_clone (E := E) w) @ (∅ : CoPset)
@@ -1409,7 +1419,7 @@ theorem weak_clone_spec (γ : GName) (w : Weak T) (v : T) :
 /-- Partial, as in `ArcAPI`: a thread that keeps losing the compare-and-swap
 owes nothing.  Here the race it loses is one the model actually admits. -/
 theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd]
-    (γ : GName) (w : Weak T) (v : T) :
+    (γ : GName) (w : WeakHandle T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
         Hd Mode.part (weak_upgrade (E := E) w) @ (∅ : CoPset)
@@ -1463,12 +1473,12 @@ theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd]
       by_cases hn0 : n = 0
       · have hEq : arcAuth (GF := GF) (T := T) γ (if n = 0 then 0 else n + 1) k
             = arcAuth (GF := GF) (T := T) γ n k := by rw [if_pos hn0, hn0]
-        have hprog : ∀ A B : ITree E (Unit ⊕ Option (Arc T)),
+        have hprog : ∀ A B : ITree E (Unit ⊕ Option (Handle T)),
             (if ((n : Nat) : Int) = 0 then A else B) = A :=
           fun _ _ => if_pos (by grind)
-        have hret : ∀ z : Arc T, (if n = 0 then none else some z) = none :=
+        have hret : ∀ z : Handle T, (if n = 0 then none else some z) = none :=
           fun _ => if_pos hn0
-        have hpost : ∀ z : Arc T,
+        have hpost : ∀ z : Handle T,
             (if n = 0 then iprop(emp) else isArc (GF := GF) γ z v') = iprop(emp) :=
           fun _ => if_pos hn0
         iright
@@ -1656,7 +1666,7 @@ theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd]
               · iintro HAU
                 simp only [Bool.false_eq_true, if_false]
                 iret
-                ihave HWn : isWeak γ (Weak.live a₂) v₂ $$ [Hmeta Hweak]
+                ihave HWn : isWeak γ (WeakHandle.live a₂) v₂ $$ [Hmeta Hweak]
                 · iunfold isWeak
                   isplitl [Hmeta]
                   · iexact Hmeta
@@ -1664,7 +1674,7 @@ theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd]
                 iapply IH $$ HWn HAU
 
 
-theorem weak_strong_count_spec (γ : GName) (w : Weak T) (v : T) :
+theorem weak_strong_count_spec (γ : GName) (w : WeakHandle T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
         Hd m (weak_strong_count (E := E) w) @ (∅ : CoPset)
@@ -1729,7 +1739,7 @@ theorem weak_strong_count_spec (γ : GName) (w : Weak T) (v : T) :
           · iexact Hweak
 
 
-theorem weak_drop_spec (γ : GName) (w : Weak T) (v : T) :
+theorem weak_drop_spec (γ : GName) (w : WeakHandle T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
         Hd m (weak_drop (E := E) w) @ (∅ : CoPset)
@@ -1846,7 +1856,7 @@ theorem weak_drop_spec (γ : GName) (w : Weak T) (v : T) :
 
 
 omit [HeapGS GF] [stateH heapInterp -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd] [stepH GF m -<ₕ Hd] [ArcG GF T] in
-theorem dangling_clone_spec (w : Weak T) (M : CoPset) :
+theorem dangling_clone_spec (w : WeakHandle T) (M : CoPset) :
     ⦃ isDanglingWeak (GF := GF) w ⦄ (weak_clone (E := E) w) @ Hd ; m ; M
     ⦃ r, ⌜r = w⌝ ∗ isDanglingWeak w ⦄ := by
   show _ ⊢ _
@@ -1858,7 +1868,7 @@ theorem dangling_clone_spec (w : Weak T) (M : CoPset) :
   itrivial
 
 omit [HeapGS GF] [stateH heapInterp -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd] [stepH GF m -<ₕ Hd] [ArcG GF T] in
-theorem dangling_upgrade_spec (w : Weak T) (M : CoPset) :
+theorem dangling_upgrade_spec (w : WeakHandle T) (M : CoPset) :
     ⦃ isDanglingWeak (GF := GF) w ⦄ (weak_upgrade (E := E) w) @ Hd ; m ; M
     ⦃ r, ⌜r = none⌝ ⦄ := by
   show _ ⊢ _
@@ -1870,7 +1880,7 @@ theorem dangling_upgrade_spec (w : Weak T) (M : CoPset) :
   itrivial
 
 omit [HeapGS GF] [stateH heapInterp -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd] [stepH GF m -<ₕ Hd] [ArcG GF T] in
-theorem dangling_strong_count_spec (w : Weak T) (M : CoPset) :
+theorem dangling_strong_count_spec (w : WeakHandle T) (M : CoPset) :
     ⦃ isDanglingWeak (GF := GF) w ⦄ (weak_strong_count (E := E) w) @ Hd ; m ; M
     ⦃ r, ⌜r = 0⌝ ⦄ := by
   show _ ⊢ _
@@ -1882,7 +1892,7 @@ theorem dangling_strong_count_spec (w : Weak T) (M : CoPset) :
   itrivial
 
 omit [HeapGS GF] [stateH heapInterp -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd] [stepH GF m -<ₕ Hd] [ArcG GF T] in
-theorem dangling_drop_spec (w : Weak T) (M : CoPset) :
+theorem dangling_drop_spec (w : WeakHandle T) (M : CoPset) :
     ⦃ isDanglingWeak (GF := GF) w ⦄ (weak_drop (E := E) w) @ Hd ; m ; M
     ⦃ _r, emp ⦄ := by
   show _ ⊢ _
@@ -1895,11 +1905,13 @@ theorem dangling_drop_spec (w : Weak T) (M : CoPset) :
 
 /-- The interface is met over the atomic heap.
 
-Its own ghost theory: `Arc`, `arcAuth`, `isArc` and the rest are declared
+Its own ghost theory: `Handle`, `arcAuth`, `isArc` and the rest are declared
 here rather than shared with the archived `Rc`, so the two are independent
 implementations of `ArcAPI`. -/
 noncomputable instance instArcAPI [stepH GF Mode.part -<ₕ Hd] :
     ArcAPI GF Hd m T where
+  Arc := Handle
+  Weak := WeakHandle
 
   new := new
   deref := deref
