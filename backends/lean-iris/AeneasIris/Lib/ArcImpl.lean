@@ -8,19 +8,20 @@ import AeneasIris.Tactics.Core
 import Iris.BI.Lib.Atomic
 import AeneasIris.AtomicWpi
 
-/-! # The ITree `Arc`: the implementation, its specs, and the instance -/
+/-! # The ITree `Arc` over the atomic heap: implementation, specs, instance -/
 
 unseal Aeneas.Std.Result
 
 namespace AeneasIris.ArcImpl
 
 open Iris BI Aeneas.Data.Coinductive
-open AeneasIris AeneasIris.Heap AeneasIris.HeapAPI
+open AeneasIris AeneasIris.AtomicHeapAPI
 open Aeneas.Std (StateE StepE Loc Val RustHeap)
 open scoped Aeneas.Std
 open AeneasIris.Step (lat stepH)
 open Iris.CMRA Iris.OFE
 open scoped Iris
+
 
 structure Handle (T : Type) where
   strong : Loc
@@ -41,13 +42,13 @@ variable [Aeneas.Std.ConcE.{1} -< E]
 variable {T : Type}
 
 noncomputable def new (x : T) : ITree E (Handle T) := do
-  let s ← alloc (1 : Int)
-  let w ← alloc (1 : Int)
-  let d ← alloc x
+  let s ← HeapAPI.alloc (1 : Int)
+  let w ← HeapAPI.alloc (1 : Int)
+  let d ← HeapAPI.alloc x
   return ⟨s, w, d⟩
 
 noncomputable def deref (a : Handle T) : ITree E T :=
-  load a.data
+  HeapAPI.load a.data
 
 noncomputable def strong_count (a : Handle T) : ITree E Int :=
   load a.strong
@@ -60,13 +61,13 @@ noncomputable def downgrade (a : Handle T) : ITree E (WeakHandle T) := do
   let _ ← faa a.weak (1 : Int)
   return .live a
 
-noncomputable def drop_strong (a : Handle T) : ITree E Bool := do
+noncomputable def drop_strong (a : Handle T) : ITree E Unit := do
   let old : Int ← faa a.strong (-1)
   if old = 1 then
-    let _ ← HeapAPI.free a.data
-    return true
+    let _ ← free a.data
+    return ()
   else
-    return false
+    return ()
 
 def weak_new : WeakHandle T := .dangling
 
@@ -83,12 +84,13 @@ noncomputable def weak_drop (w : WeakHandle T) : ITree E Unit :=
   | .live a => do
       let old : Int ← faa a.weak (-1)
       if old = 1 then
-        let _ ← HeapAPI.free a.strong
-        HeapAPI.free a.weak
+        let _ ← free a.strong
+        free a.weak
       else
         return ()
 
-/-- No `yield`: this is a CAS retry, not a wait. -/
+/-- The retry is real here: the count may change between the load and the
+compare-and-swap, so both are interference points. -/
 noncomputable def try_upgrade (a : Handle T) : ITree E (Option (Handle T)) :=
   ITree.iter (fun _ => do
     let n : Int ← load a.strong
@@ -185,6 +187,8 @@ instance instCancelableQpPos {x : Qp × PosNat} : CMRA.Cancelable x where
   cancelableN hv h := ⟨CMRA.cancelableN hv.1 h.1, CMRA.cancelableN hv.2 h.2⟩
 
 section Assertions
+
+open AeneasIris.Heap AeneasIris.HeapAPI
 
 variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF] [G : HeapGS.{0} GF]
 variable {T : Type}
@@ -719,15 +723,58 @@ end Assertions
 section Specs
 
 open AeneasIris.AtomicWpi
+open AeneasIris.Heap AeneasIris.HeapAPI
 
 variable {GF : BundledGFunctors} [Iris.InvGS_gen hlc GF] [HeapGS.{0} GF]
 variable {E : Effect.{1}} [StateE RustHeap.{0} -< E] [StepE.{1} -< E]
 variable [Aeneas.Std.FailE.{1} -< E]
 variable [Aeneas.Std.ConcE.{1} -< E]
-variable {Hd : Handler E GF} [stateH heapInterp -<ₕ Hd]
+variable {Hd : Handler E GF} [stateH heapInterp -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd]
 variable {m : Mode} [stepH GF m -<ₕ Hd]
 variable {T : Type} [ArcG GF T]
 
+
+
+
+
+
+
+
+
+
+
+omit [HeapGS GF] [StateE RustHeap -< E] [StepE -< E] [Aeneas.Std.FailE -< E] [Aeneas.Std.ConcE -< E] [stateH heapInterp -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd] [stepH GF m -<ₕ Hd] in
+private theorem wpi_aupd_choose {A B V : Type}
+    (Eo Ei Em : CoPset) (t : ITree E V)
+    (α : A → IProp GF) (β Ψ : A → B → IProp GF) (Φ : Post GF V)
+    (hsub : Eo ⊆ Em) :
+    atomicUpdate Eo Ei α β Ψ ⊢
+      iprop((∀ x, α x -∗ wpi_mask GF Hd m t
+              (fun v => iprop((α x ∗ (atomicUpdate Eo Ei α β Ψ -∗ Φ v))
+                              ∨ (∃ y, β x y ∗ (Ψ x y -∗ Φ v)))) Ei) -∗
+            wpi_mask GF Hd m t Φ Em) := by
+  iintro HAU Hbody
+  iapply (AeneasIris.wpi_reduce_mask (H := Hd) t Φ Em Ei)
+  imod (Iris.aupd_acc _ _ _ Eo Ei Em hsub) $$ HAU with ⟨%x, Hα, Hclose⟩
+  imodintro
+  iapply (AeneasIris.wpi_wand (H := Hd) t
+            (fun v => iprop((α x ∗ (atomicUpdate Eo Ei α β Ψ -∗ Φ v))
+                            ∨ (∃ y, β x y ∗ (Ψ x y -∗ Φ v))))
+            (fun v => iprop(|={Ei, Em}=> Φ v)) Ei) $$ [Hclose]
+  · iintro %v HH
+    icases HH with (⟨Hα', Hret⟩ | ⟨%y, Hβ, Hret⟩)
+    · icases Hclose with ⟨Habort, -⟩
+      imod Habort $$ Hα' with HAU'
+      imodintro
+      iapply Hret $$ HAU'
+    · icases Hclose with ⟨-, Hcommit⟩
+      imod Hcommit $$ Hβ with HΨ
+      imodintro
+      iapply Hret $$ HΨ
+  · iapply Hbody $$ Hα
+
+
+omit [Conc.ConcH GF -<ₕ Hd] in
 theorem new_spec (v : T) (M : CoPset) :
     ⦃ emp ⦄ (new (E := E) v) @ Hd ; m ; M
     ⦃ a, ∃ γ, arcAuth (T := T) γ 1 0 ∗ isArc γ a v ⦄ := by
@@ -805,6 +852,7 @@ theorem new_spec (v : T) (M : CoPset) :
         iexact Hstrong
       · iexact Hd2
 
+omit [Conc.ConcH GF -<ₕ Hd] in
 theorem deref_spec (γ : GName) (a : Handle T) (v : T) (M : CoPset) :
     ⦃ isArc γ a v ⦄ (deref (E := E) a) @ Hd ; m ; M
     ⦃ r, ⌜r = v⌝ ∗ isArc γ a v ⦄ := by
@@ -821,12 +869,15 @@ theorem deref_spec (γ : GName) (a : Handle T) (v : T) (M : CoPset) :
 
 theorem strong_count_spec (γ : GName) (a : Handle T) (v : T) :
     ⊢ isArc γ a v -∗
-      ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫ Hd m (strong_count (E := E) a) @ (∅ : CoPset)
+      ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
+        Hd m (strong_count (E := E) a) @ (∅ : CoPset)
       ⟪ arcAuth (T := T) γ n k | RET (n : Int); isArc γ a v ⟫ := by
   iintro HA
   simp only [atomicWpi]
   iintro %Φ HAU
   simp only [strong_count]
+  simp only [AtomicHeapAPI.load]
+  iapply Conc.wpi_sync
   iaupd_commit HAU as ⟨n, k⟩ with HAuth
   iunfold arcAuth at HAuth
   icases HAuth with ⟨%a', %v', %qs, Hphys, Hpay, Hown⟩
@@ -877,15 +928,19 @@ theorem strong_count_spec (γ : GName) (a : Handle T) (v : T) :
           · iexact Hstrong
           · iexact Hdata
 
+
 theorem clone_spec (γ : GName) (a : Handle T) (v : T) :
     ⊢ isArc γ a v -∗
-      ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫ Hd m (clone (E := E) a) @ (∅ : CoPset)
+      ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
+        Hd m (clone (E := E) a) @ (∅ : CoPset)
       ⟪ arcAuth (T := T) γ (n + 1) k | RET a; isArc γ a v ∗ isArc γ a v ⟫ := by
   iintro HA
   simp only [atomicWpi]
   iintro %Φ HAU
   simp only [clone]
   ibind
+  simp only [AtomicHeapAPI.faa]
+  iapply Conc.wpi_sync
   iaupd_commit HAU as ⟨n, k⟩ with HAuth
   iunfold arcAuth at HAuth
   icases HAuth with ⟨%a', %v', %qs, Hphys, Hpay, Hown⟩
@@ -991,9 +1046,11 @@ theorem clone_spec (γ : GName) (a : Handle T) (v : T) :
               iexact Hstrong2
             · iexact Hd2
 
+
 theorem downgrade_spec (γ : GName) (a : Handle T) (v : T) :
     ⊢ isArc γ a v -∗
-      ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫ Hd m (downgrade (E := E) a) @ (∅ : CoPset)
+      ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
+        Hd m (downgrade (E := E) a) @ (∅ : CoPset)
       ⟪ arcAuth (T := T) γ n (k + 1)
       | w, RET w; isArc γ a v ∗ isWeak γ w v ⟫ := by
   iintro HA
@@ -1001,6 +1058,8 @@ theorem downgrade_spec (γ : GName) (a : Handle T) (v : T) :
   iintro %Φ HAU
   simp only [downgrade]
   ibind
+  simp only [AtomicHeapAPI.faa]
+  iapply Conc.wpi_sync
   iaupd_commit HAU as ⟨n, k⟩ with HAuth
   iunfold arcAuth at HAuth
   icases HAuth with ⟨%a', %v', %qs, Hphys, Hpay, Hown⟩
@@ -1076,16 +1135,20 @@ theorem downgrade_spec (γ : GName) (a : Handle T) (v : T) :
         · iunfold arcWeakOwn
           iexact Hwk
 
+
 theorem drop_strong_spec (γ : GName) (a : Handle T) (v : T) :
     ⊢ isArc γ a v -∗
-      ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫ Hd m (drop_strong (E := E) a) @ (∅ : CoPset)
+      ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
+        Hd m (drop_strong (E := E) a) @ (∅ : CoPset)
       ⟪ arcAuth (T := T) γ (n - 1) (if n = 1 then k + 1 else k)
-      | w, RET (decide (n = 1)); if n = 1 then isWeak γ w v else emp ⟫ := by
+      | w, RET (); if n = 1 then isWeak γ w v else emp ⟫ := by
   iintro HA
   simp only [atomicWpi]
   iintro %Φ HAU
   simp only [drop_strong]
   ibind
+  simp only [AtomicHeapAPI.faa]
+  iapply Conc.wpi_sync
   iaupd_commit HAU as ⟨n, k⟩ with HAuth
   iunfold arcAuth at HAuth
   icases HAuth with ⟨%a', %v', %qs, Hphys, Hpay, Hown⟩
@@ -1173,6 +1236,8 @@ theorem drop_strong_spec (γ : GName) (a : Handle T) (v : T) :
         simp only [if_pos (show ((n' + 1 : Nat) : Int) = 1 from by
           rw [hn1]; norm_num)]
         ibind
+        simp only [AtomicHeapAPI.free]
+        iapply Conc.wpi_sync
         iapply (HeapAPI.wpi_free (Hd := Hd) (m := m) (E := E) a'.data v')
         iapply (AeneasIris.Step.lat_intro m _)
         isplitl [Hfull]
@@ -1258,12 +1323,12 @@ theorem drop_strong_spec (γ : GName) (a : Handle T) (v : T) :
         iapply HΨ $$ %(WeakHandle.live a')
         itrivial
 
+
 theorem weak_clone_spec (γ : GName) (w : WeakHandle T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
         Hd m (weak_clone (E := E) w) @ (∅ : CoPset)
-      ⟪ arcAuth (T := T) γ n (k + 1)
-      | RET w; isWeak γ w v ∗ isWeak γ w v ⟫ := by
+      ⟪ arcAuth (T := T) γ n (k + 1) | RET w; isWeak γ w v ∗ isWeak γ w v ⟫ := by
   cases w
   · simp only [isWeak]
     iintro HW
@@ -1275,6 +1340,8 @@ theorem weak_clone_spec (γ : GName) (w : WeakHandle T) (v : T) :
     iintro %Φ HAU
     simp only [weak_clone]
     ibind
+    simp only [AtomicHeapAPI.faa]
+    iapply Conc.wpi_sync
     iaupd_commit HAU as ⟨n, k⟩ with HAuth
     iunfold arcAuth at HAuth
     icases HAuth with ⟨%a', %v', %qs, Hphys, Hpay, Hown⟩
@@ -1348,35 +1415,9 @@ theorem weak_clone_spec (γ : GName) (w : WeakHandle T) (v : T) :
             · iunfold arcWeakOwn
               iexact Hk2
 
-private theorem wpi_aupd_choose {A B V : Type}
-    (Eo Ei Em : CoPset) (t : ITree E V)
-    (α : A → IProp GF) (β Ψ : A → B → IProp GF) (Φ : Post GF V)
-    (hsub : Eo ⊆ Em) :
-    atomicUpdate Eo Ei α β Ψ ⊢
-      iprop((∀ x, α x -∗ wpi_mask GF Hd m t
-              (fun v => iprop((α x ∗ (atomicUpdate Eo Ei α β Ψ -∗ Φ v))
-                              ∨ (∃ y, β x y ∗ (Ψ x y -∗ Φ v)))) Ei) -∗
-            wpi_mask GF Hd m t Φ Em) := by
-  iintro HAU Hbody
-  iapply (AeneasIris.wpi_reduce_mask (H := Hd) t Φ Em Ei)
-  imod (Iris.aupd_acc _ _ _ Eo Ei Em hsub) $$ HAU with ⟨%x, Hα, Hclose⟩
-  imodintro
-  iapply (AeneasIris.wpi_wand (H := Hd) t
-            (fun v => iprop((α x ∗ (atomicUpdate Eo Ei α β Ψ -∗ Φ v))
-                            ∨ (∃ y, β x y ∗ (Ψ x y -∗ Φ v))))
-            (fun v => iprop(|={Ei, Em}=> Φ v)) Ei) $$ [Hclose]
-  · iintro %v HH
-    icases HH with (⟨Hα', Hret⟩ | ⟨%y, Hβ, Hret⟩)
-    · icases Hclose with ⟨Habort, -⟩
-      imod Habort $$ Hα' with HAU'
-      imodintro
-      iapply Hret $$ HAU'
-    · icases Hclose with ⟨-, Hcommit⟩
-      imod Hcommit $$ Hβ with HΨ
-      imodintro
-      iapply Hret $$ HΨ
-  · iapply Hbody $$ Hα
 
+/-- Partial, as in `ArcAPI`: a thread that keeps losing the compare-and-swap
+owes nothing.  Here the race it loses is one the model actually admits. -/
 theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd]
     (γ : GName) (w : WeakHandle T) (v : T) :
     ⊢ isWeak γ w v -∗
@@ -1399,6 +1440,8 @@ theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd]
     iunfold ITree.iter
     ibind
     ibind
+    simp only [AtomicHeapAPI.load]
+    iapply Conc.wpi_sync
     iapply (wpi_aupd_choose (m := Mode.part) (hsub := by aupd_mask)) $$ HAU
     iintro %pk HAuth
     obtain ⟨n, k⟩ := pk
@@ -1484,6 +1527,8 @@ theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd]
         · iintro HAU
           simp only [if_neg (show ¬(((n' + 1 : Nat) : Int) = 0) from by grind)]
           ibind
+          simp only [AtomicHeapAPI.cas]
+          iapply Conc.wpi_sync
           iapply (wpi_aupd_choose (m := Mode.part) (hsub := by aupd_mask)) $$ HAU
           iintro %pk2 HAuth2
           obtain ⟨n₂, k₂⟩ := pk2
@@ -1628,6 +1673,7 @@ theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd]
                   · iexact Hweak
                 iapply IH $$ HWn HAU
 
+
 theorem weak_strong_count_spec (γ : GName) (w : WeakHandle T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
@@ -1643,6 +1689,8 @@ theorem weak_strong_count_spec (γ : GName) (w : WeakHandle T) (v : T) :
     simp only [atomicWpi]
     iintro %Φ HAU
     simp only [weak_strong_count]
+    simp only [AtomicHeapAPI.load]
+    iapply Conc.wpi_sync
     iaupd_commit HAU as ⟨n, k⟩ with HAuth
     iunfold arcAuth at HAuth
     icases HAuth with ⟨%a', %v', %qs, Hphys, Hpay, Hown⟩
@@ -1690,6 +1738,7 @@ theorem weak_strong_count_spec (γ : GName) (w : WeakHandle T) (v : T) :
           · iexact Hmeta
           · iexact Hweak
 
+
 theorem weak_drop_spec (γ : GName) (w : WeakHandle T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
@@ -1706,6 +1755,8 @@ theorem weak_drop_spec (γ : GName) (w : WeakHandle T) (v : T) :
     iintro %Φ HAU
     simp only [weak_drop]
     ibind
+    simp only [AtomicHeapAPI.faa]
+    iapply Conc.wpi_sync
     iaupd_commit HAU as ⟨n, k⟩ with HAuth
     iunfold arcAuth at HAuth
     icases HAuth with ⟨%a', %v', %qs, Hphys, Hpay, Hown⟩
@@ -1766,11 +1817,14 @@ theorem weak_drop_spec (γ : GName) (w : WeakHandle T) (v : T) :
         · iintro HΨ
           simp only [if_pos hone]
           ibind
+          simp only [AtomicHeapAPI.free]
+          iapply Conc.wpi_sync
           iapply (HeapAPI.wpi_free (Hd := Hd) (m := m) (E := E) a'.strong ((0 : Nat) : Int))
           iapply (AeneasIris.Step.lat_intro m _)
           isplitl [Hs]
           · iexact Hs
           · imodintro
+            iapply Conc.wpi_sync
             iapply (HeapAPI.wpi_free (Hd := Hd) (m := m) (E := E) a'.weak (wcell 0 1 + -1))
             iapply (AeneasIris.Step.lat_intro m _)
             isplitl [Hw2]
@@ -1800,7 +1854,8 @@ theorem weak_drop_spec (γ : GName) (w : WeakHandle T) (v : T) :
           simp only [AtomicWpi.wandM_none]
           iapply HΨ $$ %()
 
-omit [ArcG GF T] in
+
+omit [HeapGS GF] [stateH heapInterp -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd] [stepH GF m -<ₕ Hd] [ArcG GF T] in
 theorem dangling_clone_spec (w : WeakHandle T) (M : CoPset) :
     ⦃ isDanglingWeak (GF := GF) w ⦄ (weak_clone (E := E) w) @ Hd ; m ; M
     ⦃ r, ⌜r = w⌝ ∗ isDanglingWeak w ⦄ := by
@@ -1812,7 +1867,7 @@ theorem dangling_clone_spec (w : WeakHandle T) (M : CoPset) :
   iapply wpi_ret
   itrivial
 
-omit [ArcG GF T] in
+omit [HeapGS GF] [stateH heapInterp -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd] [stepH GF m -<ₕ Hd] [ArcG GF T] in
 theorem dangling_upgrade_spec (w : WeakHandle T) (M : CoPset) :
     ⦃ isDanglingWeak (GF := GF) w ⦄ (weak_upgrade (E := E) w) @ Hd ; m ; M
     ⦃ r, ⌜r = none⌝ ⦄ := by
@@ -1824,7 +1879,7 @@ theorem dangling_upgrade_spec (w : WeakHandle T) (M : CoPset) :
   iapply wpi_ret
   itrivial
 
-omit [ArcG GF T] in
+omit [HeapGS GF] [stateH heapInterp -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd] [stepH GF m -<ₕ Hd] [ArcG GF T] in
 theorem dangling_strong_count_spec (w : WeakHandle T) (M : CoPset) :
     ⦃ isDanglingWeak (GF := GF) w ⦄ (weak_strong_count (E := E) w) @ Hd ; m ; M
     ⦃ r, ⌜r = 0⌝ ⦄ := by
@@ -1836,7 +1891,7 @@ theorem dangling_strong_count_spec (w : WeakHandle T) (M : CoPset) :
   iapply wpi_ret
   itrivial
 
-omit [ArcG GF T] in
+omit [HeapGS GF] [stateH heapInterp -<ₕ Hd] [Conc.ConcH GF -<ₕ Hd] [stepH GF m -<ₕ Hd] [ArcG GF T] in
 theorem dangling_drop_spec (w : WeakHandle T) (M : CoPset) :
     ⦃ isDanglingWeak (GF := GF) w ⦄ (weak_drop (E := E) w) @ Hd ; m ; M
     ⦃ _r, emp ⦄ := by
@@ -1848,6 +1903,11 @@ theorem dangling_drop_spec (w : WeakHandle T) (M : CoPset) :
   iapply wpi_ret
   itrivial
 
+/-- The interface is met over the atomic heap.
+
+Its own ghost theory: `Handle`, `arcAuth`, `isArc` and the rest are declared
+here rather than shared with the archived `Rc`, so the two are independent
+implementations of `ArcAPI`. -/
 noncomputable instance instArcAPI [stepH GF Mode.part -<ₕ Hd] :
     ArcAPI GF Hd m T where
   Arc := Handle

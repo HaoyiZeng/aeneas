@@ -45,7 +45,7 @@ class ArcAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
   strong_count : Arc T → ITree E Int
   clone : Arc T → ITree E (Arc T)
   downgrade : Arc T → ITree E (Weak T)
-  drop_strong : Arc T → ITree E Bool
+  drop_strong : Arc T → ITree E Unit
   weak_clone : Weak T → ITree E (Weak T)
   weak_drop : Weak T → ITree E Unit
   weak_upgrade : Weak T → ITree E (Option (Arc T))
@@ -111,7 +111,7 @@ class ArcAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
     ⊢ isArc γ a v -∗
       ⟪ ∀ n k, arcAuth γ n k ⟫ Hd m (drop_strong a) @ (∅ : CoPset)
       ⟪ arcAuth γ (n - 1) (if n = 1 then k + 1 else k)
-      | w, RET (decide (n = 1)); if n = 1 then isWeak γ w v else emp ⟫
+      | w, RET (); if n = 1 then isWeak γ w v else emp ⟫
 
   weak_clone_spec (γ : GName) (w : Weak T) (v : T) :
     ⊢ isWeak γ w v -∗

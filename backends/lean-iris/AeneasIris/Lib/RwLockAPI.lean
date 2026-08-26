@@ -16,6 +16,16 @@ inductive LockState
   | write
 deriving DecidableEq, Repr
 
+def LockState.word : LockState → Int
+  | .free => 0
+  | .read n => (n : Int) + 1
+  | .write => -1
+
+theorem LockState.word_injective :
+    Function.Injective LockState.word := by
+  intro a b h
+  cases a <;> cases b <;> simp_all [AeneasIris.LockState.word] <;> grind
+
 section Interface
 
 variable {hlc : Iris.HasLC}
