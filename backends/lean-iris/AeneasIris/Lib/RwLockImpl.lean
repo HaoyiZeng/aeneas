@@ -1315,8 +1315,9 @@ theorem read_release_spec (γ : GName) (g : ReadGuard T) (v : T) :
     ⊢ readGuardFrac γ g 1 v -∗
       ⟪ ∀ s v₀, isRwLock γ g.lock s v₀ ⟫
         Hd .part (read_release (E := E) g) @ (∅ : CoPset)
-      ⟪ (isRwLock γ g.lock .free v₀ ∗ ⌜s = .read 0⌝) ∨
-        (∃ n : Nat, isRwLock γ g.lock (.read n) v₀ ∗ ⌜s = .read (n + 1)⌝)
+      ⟪ ⌜v₀ = v⌝ ∗
+        ((isRwLock γ g.lock .free v₀ ∗ ⌜s = .read 0⌝) ∨
+         (∃ n : Nat, isRwLock γ g.lock (.read n) v₀ ∗ ⌜s = .read (n + 1)⌝))
       | RET () ⟫ := by
   iintro HR
   simp only [atomicWpi]
@@ -1369,7 +1370,9 @@ theorem read_release_spec (γ : GName) (g : ReadGuard T) (v : T) :
       iright
       iexists ()
       isplitl [Hst Hauth2 Hloc2 Hfull]
-      · ileft
+      · isplitl []
+        · ipureintro; trivial
+        ileft
         isplitl [Hst Hauth2 Hloc2 Hfull]
         · iunfold isRwLock
           isplitl [Hst]
@@ -1411,7 +1414,9 @@ theorem read_release_spec (γ : GName) (g : ReadGuard T) (v : T) :
       iright
       iexists ()
       isplitl [Hst Hauth2 Hloc2 Hrest]
-      · iright
+      · isplitl []
+        · ipureintro; trivial
+        iright
         iexists k
         isplitl [Hst Hauth2 Hloc2 Hrest]
         · iunfold isRwLock
@@ -1448,8 +1453,9 @@ private theorem read_release_box (γ : GName) (lk : Handle T) (v : T) :
     ⊢@{IProp GF} □ (readGuardFrac γ (⟨lk⟩ : ReadGuard T) 1 v -∗
       ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫
           Hd .part (read_release (E := E) (⟨lk⟩ : ReadGuard T)) @ (∅ : CoPset)
-        ⟪ (isRwLock γ lk .free v₀ ∗ ⌜s' = .read 0⌝) ∨
-          (∃ n : Nat, isRwLock γ lk (.read n) v₀ ∗ ⌜s' = .read (n + 1)⌝)
+        ⟪ ⌜v₀ = v⌝ ∗
+          ((isRwLock γ lk .free v₀ ∗ ⌜s' = .read 0⌝) ∨
+           (∃ n : Nat, isRwLock γ lk (.read n) v₀ ∗ ⌜s' = .read (n + 1)⌝))
         | RET () ⟫) := by
   iintro !> HRG
   have HRR := read_release_spec (Hd := Hd) γ (⟨lk⟩ : ReadGuard T) v

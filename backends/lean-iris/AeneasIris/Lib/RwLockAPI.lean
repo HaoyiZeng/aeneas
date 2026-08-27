@@ -63,8 +63,9 @@ only the update has nothing left to prove. -/
     (γ : GName) (lk : L) (g : R) (v : T) (rel : ITree E Unit) : IProp GF :=
   iprop(□ (readGuardFrac γ g 1 v -∗
     ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫ Hd m rel @ (∅ : CoPset)
-      ⟪ (isRwLock γ lk .free v₀ ∗ ⌜s' = .read 0⌝) ∨
-        (∃ n : Nat, isRwLock γ lk (.read n) v₀ ∗ ⌜s' = .read (n + 1)⌝)
+      ⟪ ⌜v₀ = v⌝ ∗
+        ((isRwLock γ lk .free v₀ ∗ ⌜s' = .read 0⌝) ∨
+         (∃ n : Nat, isRwLock γ lk (.read n) v₀ ∗ ⌜s' = .read (n + 1)⌝))
       | RET () ⟫))
 
 /-! Unfolding lemmas.  The definitions exist to keep the class field and the
@@ -87,8 +88,9 @@ spelled-out form should not have to care, so `simp` puts it back. -/
     ReadReleases Hd m isRwLock readGuardFrac γ lk g v rel
       = iprop(□ (readGuardFrac γ g 1 v -∗
           ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫ Hd m rel @ (∅ : CoPset)
-            ⟪ (isRwLock γ lk .free v₀ ∗ ⌜s' = .read 0⌝) ∨
-              (∃ n : Nat, isRwLock γ lk (.read n) v₀ ∗ ⌜s' = .read (n + 1)⌝)
+            ⟪ ⌜v₀ = v⌝ ∗
+              ((isRwLock γ lk .free v₀ ∗ ⌜s' = .read 0⌝) ∨
+               (∃ n : Nat, isRwLock γ lk (.read n) v₀ ∗ ⌜s' = .read (n + 1)⌝))
             | RET () ⟫)) := rfl
 
 /-- Both obligations are `□`, so callers may `icases` them out as persistent
