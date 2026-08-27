@@ -69,6 +69,10 @@ class ArcAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
   isArc_timeless γ a v : Timeless (isArc γ a v)
   isWeak_timeless γ w v : Timeless (isWeak γ w v)
   isDanglingWeak_persistent w : Persistent (isDanglingWeak w)
+  /-- `Persistent` does not imply `Timeless`.  A client that stores a dangling
+  handle inside an invariant -- which is what a `Weak` field whose abstract
+  counterpart is `none` amounts to -- needs this to open it without a later. -/
+  isDanglingWeak_timeless w : Timeless (isDanglingWeak w)
 
   weak_new_dangling : ⊢ isDanglingWeak weak_new
   arcAuth_exclusive γ n₁ k₁ n₂ k₂ :
@@ -150,6 +154,7 @@ class ArcAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
 
 attribute [instance] ArcAPI.arcAuth_timeless ArcAPI.isArc_timeless
   ArcAPI.isWeak_timeless ArcAPI.isDanglingWeak_persistent
+  ArcAPI.isDanglingWeak_timeless
 
 end Interface
 

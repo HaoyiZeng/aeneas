@@ -710,6 +710,20 @@ instance isDanglingWeak_persistent (wh : WeakHandle T) :
     Persistent (PROP := IProp GF) (isDanglingWeak wh) := by
   unfold isDanglingWeak; infer_instance
 
+/-- Pure, hence timeless too.  `Persistent` does not imply `Timeless`, and a
+    client that stores a dangling handle inside an invariant needs this to open
+    it without a later -- a `Weak` field whose model counterpart is `none` is
+    exactly such a handle. -/
+instance isDanglingWeak_timeless (wh : WeakHandle T) :
+    Timeless (PROP := IProp GF) (isDanglingWeak wh) := by
+  unfold isDanglingWeak; infer_instance
+
+/-- `weak_new` is dangling, without needing a handler.  The `ArcAPI` field of
+    this name is reachable only through an instance, hence only where `Hd` and
+    `m` are in scope; this is a fact about a value and should not need them. -/
+theorem isDanglingWeak_new : ⊢@{IProp GF} isDanglingWeak (T := T) weak_new := by
+  simp only [isDanglingWeak, weak_new]; itrivial
+
 theorem isWeak_not_dangling (γ : GName) (wh : WeakHandle T) (v : T) :
     iprop(isWeak γ wh v ∗ isDanglingWeak wh) ⊢@{IProp GF} iprop(False) := by
   cases wh
@@ -1935,6 +1949,7 @@ noncomputable instance instArcAPI [stepH GF Mode.part -<ₕ Hd] :
   isArc_timeless := by infer_instance
   isWeak_timeless := by infer_instance
   isDanglingWeak_persistent := by infer_instance
+  isDanglingWeak_timeless := by infer_instance
   weak_new_dangling := by simp only [isDanglingWeak, weak_new]; itrivial
   arcAuth_exclusive := arcAuth_exclusive
   isArc_agree := isArc_agree
