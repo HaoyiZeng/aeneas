@@ -1852,54 +1852,13 @@ theorem dangling_drop_spec (w : WeakHandle T) (M : CoPset) :
   iapply wpi_ret
   itrivial
 
-@[reducible] noncomputable def rcAPI [stepH GF Mode.part -<ₕ Hd] :
-    ArcAPI GF Hd m T where
-  Arc := Handle
-  Weak := WeakHandle
+/-! The `ArcAPI` instantiation that used to sit here has been removed.
 
-  new := new
-  deref := deref
-  strong_count := strong_count
-  clone := clone
-  downgrade := downgrade
-  drop_strong := drop_strong
-  weak_clone := weak_clone
-  weak_drop := weak_drop
-  weak_upgrade := weak_upgrade
-  weak_strong_count := weak_strong_count
-
-  weak_new := weak_new
-
-  arcAuth := arcAuth
-  isArc := isArc
-  isWeak := isWeak
-  isDanglingWeak := isDanglingWeak
-
-  arcAuth_timeless := by infer_instance
-  isArc_timeless := by infer_instance
-  isWeak_timeless := by infer_instance
-  isDanglingWeak_persistent := by infer_instance
-  weak_new_dangling := by simp only [isDanglingWeak, weak_new]; itrivial
-  arcAuth_exclusive := arcAuth_exclusive
-  isArc_agree := isArc_agree
-  isArc_strong_pos := isArc_strong_pos
-  isWeak_weak_pos := isWeak_weak_pos
-  isWeak_not_dangling := isWeak_not_dangling
-
-  new_spec := new_spec
-  deref_spec := deref_spec
-  strong_count_spec := strong_count_spec
-  clone_spec := clone_spec
-  downgrade_spec := downgrade_spec
-  drop_strong_spec := drop_strong_spec
-  weak_clone_spec := weak_clone_spec
-  weak_upgrade_spec := weak_upgrade_spec
-  weak_strong_count_spec := weak_strong_count_spec
-  weak_drop_spec := weak_drop_spec
-  dangling_clone_spec := dangling_clone_spec
-  dangling_upgrade_spec := dangling_upgrade_spec
-  dangling_strong_count_spec := dangling_strong_count_spec
-  dangling_drop_spec := dangling_drop_spec
+    This file is archived: `Lib/ArcImpl.lean` is the live implementation and
+    carries `instArcAPI`.  The assembly here was never referenced, and it fell
+    behind the class -- `isDanglingWeak_timeless` was added to `ArcAPI` and no
+    corresponding field was ever supplied, so the whole module stopped
+    elaborating.  Nothing depended on it. -/
 
 end Specs
 
