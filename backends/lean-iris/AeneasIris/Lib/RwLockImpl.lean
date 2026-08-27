@@ -1313,10 +1313,10 @@ theorem write_spec (γ : GName) (lk : Handle T) :
 
 theorem read_release_spec (γ : GName) (g : ReadGuard T) (v : T) :
     ⊢ readGuardFrac γ g 1 v -∗
-      ⟪ ∀ s, isRwLock γ g.lock s v ⟫
+      ⟪ ∀ s v₀, isRwLock γ g.lock s v₀ ⟫
         Hd .part (read_release (E := E) g) @ (∅ : CoPset)
-      ⟪ (isRwLock γ g.lock .free v ∗ ⌜s = .read 0⌝) ∨
-        (∃ n : Nat, isRwLock γ g.lock (.read n) v ∗ ⌜s = .read (n + 1)⌝)
+      ⟪ (isRwLock γ g.lock .free v₀ ∗ ⌜s = .read 0⌝) ∨
+        (∃ n : Nat, isRwLock γ g.lock (.read n) v₀ ∗ ⌜s = .read (n + 1)⌝)
       | RET () ⟫ := by
   iintro HR
   simp only [atomicWpi]
@@ -1324,7 +1324,13 @@ theorem read_release_spec (γ : GName) (g : ReadGuard T) (v : T) :
   simp only [read_release, AtomicHeapAPI.faa, sync_bind]
   iapply Conc.wpi_sync
   iapply (wpi_aupd_choose (hsub := by aupd_mask)) $$ HAU
-  iintro %s₁ Hlock
+  iintro %sv Hlock
+  obtain ⟨s₁, v₀⟩ := sv
+  ihave #hvv : iprop(⌜v₀ = v⌝) $$ [Hlock HR]
+  · iapply (readGuardFrac_agree γ g.lock s₁ g 1 v₀ v)
+    isplitl [Hlock] <;> iassumption
+  icases hvv with %hvv
+  subst v₀
   rcases s₁ with _ | mm | _
   · ihave Hpair : iprop(isRwLock γ g.lock LockState.free v ∗ readGuardFrac γ g 1 v) $$ [Hlock HR]
     · isplitl [Hlock]
@@ -1440,10 +1446,10 @@ theorem read_release_spec (γ : GName) (g : ReadGuard T) (v : T) :
     exact absurd hbad (by rintro ⟨k, hk⟩; cases hk)
 private theorem read_release_box (γ : GName) (lk : Handle T) (v : T) :
     ⊢@{IProp GF} □ (readGuardFrac γ (⟨lk⟩ : ReadGuard T) 1 v -∗
-      ⟪ ∀ s', isRwLock γ lk s' v ⟫
+      ⟪ ∀ s' v₀, isRwLock γ lk s' v₀ ⟫
           Hd .part (read_release (E := E) (⟨lk⟩ : ReadGuard T)) @ (∅ : CoPset)
-        ⟪ (isRwLock γ lk .free v ∗ ⌜s' = .read 0⌝) ∨
-          (∃ n : Nat, isRwLock γ lk (.read n) v ∗ ⌜s' = .read (n + 1)⌝)
+        ⟪ (isRwLock γ lk .free v₀ ∗ ⌜s' = .read 0⌝) ∨
+          (∃ n : Nat, isRwLock γ lk (.read n) v₀ ∗ ⌜s' = .read (n + 1)⌝)
         | RET () ⟫) := by
   iintro !> HRG
   have HRR := read_release_spec (Hd := Hd) γ (⟨lk⟩ : ReadGuard T) v
