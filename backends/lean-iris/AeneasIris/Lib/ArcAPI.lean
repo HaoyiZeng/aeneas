@@ -132,6 +132,33 @@ class ArcAPI (GF : BundledGFunctors) [Iris.InvGS_gen hlc GF]
       | a, RET (if n = 0 then none else some a)
       ; isWeak γ w v ∗ (if n = 0 then emp else isArc γ a v) ⟫
 
+  /-- The same upgrade, with `isWeak` supplied by the *atomic update* rather
+  than owned privately.
+
+  A private precondition demands ownership across an **interval** -- the whole
+  retry loop -- and `isWeak` is linear: `isWeak_weak_pos` ties it to one unit of
+  the weak count, it has no `Persistent` instance, and only `weak_clone_spec`
+  makes a second one. So a client whose only `isWeak` lives in a shared
+  invariant cannot meet it: opening an invariant does not duplicate its
+  contents, and two threads upgrading the same stored `Weak` have overlapping
+  intervals. Reaching a `Weak` through a *shared borrow* is exactly what Rust's
+  `&Weak::upgrade` does, and what `mini_themis`' `send` and `child_domain` do
+  behind a read guard.
+
+  Moving `isWeak` into `α` lowers the demand from an interval to an **instant**,
+  and instants interleave: the credit rests in the invariant between openings,
+  so the weak count never reaches zero and the block is never freed, while every
+  physical access happens inside an opening that has just been handed it.
+
+  This **subsumes** `weak_upgrade_spec` -- a client owning `isWeak` privately
+  frames it into the update -- so both are kept and no client need change. -/
+  weak_upgrade_shared_spec (γ : GName) (w : Weak T) (v : T) :
+    ⊢ ⟪ ∀ n k, arcAuth γ n k ∗ isWeak γ w v ⟫
+        Hd .part (weak_upgrade w) @ (∅ : CoPset)
+      ⟪ arcAuth γ (if n = 0 then 0 else n + 1) k ∗ isWeak γ w v
+      | a, RET (if n = 0 then none else some a)
+      ; (if n = 0 then emp else isArc γ a v) ⟫
+
   weak_strong_count_spec (γ : GName) (w : Weak T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth γ n k ⟫ Hd m (weak_strong_count w) @ (∅ : CoPset)

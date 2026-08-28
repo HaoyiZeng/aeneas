@@ -1688,6 +1688,280 @@ theorem weak_upgrade_spec [stepH GF Mode.part -<ₕ Hd]
                 iapply IH $$ HWn HAU
 
 
+/-- **`isWeak` in the update, not in the precondition.**  Same program, same
+    script: the private `isWeak` was only ever used *inside* an opening -- by
+    `arc_isWeak_facts`, for `a' = a0 ∧ v' = v ∧ 1 ≤ k` -- and handed back
+    untouched, so it can be drawn from `α` at each opening and returned in `β`
+    instead.  `ArcAPI` records why that is the difference between a client that
+    owns a `Weak` and one that borrows a stored one. -/
+theorem weak_upgrade_shared_spec [stepH GF Mode.part -<ₕ Hd]
+    (γ : GName) (w : WeakHandle T) (v : T) :
+    ⊢ ⟪ ∀ n k, arcAuth (T := T) γ n k ∗ isWeak γ w v ⟫
+        Hd Mode.part (weak_upgrade (E := E) w) @ (∅ : CoPset)
+      ⟪ arcAuth (T := T) γ (if n = 0 then 0 else n + 1) k ∗ isWeak γ w v
+      | a, RET (if n = 0 then none else some a)
+      ; (if n = 0 then emp else isArc γ a v) ⟫ := by
+  cases w
+  · simp only [atomicWpi]
+    iintro %Φ HAU
+    simp only [weak_upgrade]
+    iapply (wpi_aupd_choose (m := Mode.part) (hsub := by aupd_mask)) $$ HAU
+    iintro %pk HAlpha
+    icases HAlpha with ⟨-, HW⟩
+    iunfold isWeak at HW
+    iexfalso
+    iexact HW
+  · rename_i a0
+    simp only [atomicWpi]
+    iintro %Φ HAU
+    simp only [weak_upgrade, try_upgrade]
+    iloeb as IH
+    iunfold ITree.iter
+    ibind
+    ibind
+    simp only [AtomicHeapAPI.load]
+    iapply Conc.wpi_sync
+    iapply (wpi_aupd_choose (m := Mode.part) (hsub := by aupd_mask)) $$ HAU
+    iintro %pk HAlpha
+    obtain ⟨n, k⟩ := pk
+    icases HAlpha with ⟨HAuth, HW⟩
+    iunfold arcAuth at HAuth
+    icases HAuth with ⟨%a', %v', %qs, Hphys, Hpay, Hown⟩
+    iunfold isWeak at HW
+    icases HW with ⟨Hmeta, Hweak⟩
+    ihave Hf : iprop(⌜a' = a0 ∧ v' = v ∧ 1 ≤ k⌝ ∗
+        (iOwn (F := ArcF T) γ (● res (some (a', v')) n k (shareOf n qs)) ∗
+          arcMetaOwn γ a0 v ∗ arcWeakOwn (T := T) γ)) $$ [Hown Hmeta Hweak]
+    · iapply arc_isWeak_facts
+      isplitl [Hown]
+      · iexact Hown
+      · isplitl [Hmeta]
+        · iexact Hmeta
+        · iexact Hweak
+    icases Hf with ⟨%hf, Hown, Hmeta, Hweak⟩
+    obtain ⟨rfl, rfl, hpos⟩ := hf
+    simp only [physical_split a' n k (by grind)]
+    icases Hphys with ⟨Hs, Hw⟩
+    iapply (HeapAPI.wpi_load (Hd := Hd) (m := Mode.part) (E := E) a'.strong (n : Int)
+      (DFrac.own 1))
+    ilat
+    inext
+    isplitl [Hs]
+    · iexact Hs
+    · iintro Hs
+      imodintro
+      by_cases hn0 : n = 0
+      · have hEq : arcAuth (GF := GF) (T := T) γ (if n = 0 then 0 else n + 1) k
+            = arcAuth (GF := GF) (T := T) γ n k := by rw [if_pos hn0, hn0]
+        have hprog : ∀ A B : ITree E (Unit ⊕ Option (Handle T)),
+            (if ((n : Nat) : Int) = 0 then A else B) = A :=
+          fun _ _ => if_pos (by grind)
+        have hret : ∀ z : Handle T, (if n = 0 then none else some z) = none :=
+          fun _ => if_pos hn0
+        have hpost : ∀ z : Handle T,
+            (if n = 0 then iprop(emp) else isArc (GF := GF) γ z v') = iprop(emp) :=
+          fun _ => if_pos hn0
+        iright
+        iexists ()
+        isplitl [Hs Hw Hpay Hown Hmeta Hweak]
+        · isplitl [Hs Hw Hpay Hown]
+          · simp only [hEq]
+            iunfold arcAuth
+            iexists a'
+            iexists v'
+            iexists qs
+            isplitl [Hs Hw]
+            · simp only [physical_split a' n k (fun _ => hpos)]
+              isplitl [Hs]
+              · iexact Hs
+              · iexact Hw
+            · isplitl [Hpay]
+              · iexact Hpay
+              · iexact Hown
+          · iunfold isWeak
+            isplitl [Hmeta]
+            · iexact Hmeta
+            · iexact Hweak
+        · iintro HΨ
+          simp only [hprog]
+          iret
+          iret
+          simp only [hret, hpost, AtomicWpi.wandM_some]
+          iapply HΨ $$ %a'
+          itrivial
+      · obtain ⟨n', rfl⟩ : ∃ n', n = n' + 1 := ⟨n - 1, by grind⟩
+        ileft
+        isplitl [Hs Hw Hpay Hown Hmeta Hweak]
+        · isplitl [Hs Hw Hpay Hown]
+          · iunfold arcAuth
+            iexists a'
+            iexists v'
+            iexists qs
+            isplitl [Hs Hw]
+            · simp only [physical_split a' (n' + 1) k (by grind)]
+              isplitl [Hs]
+              · iexact Hs
+              · iexact Hw
+            · isplitl [Hpay]
+              · iexact Hpay
+              · iexact Hown
+          · iunfold isWeak
+            isplitl [Hmeta]
+            · iexact Hmeta
+            · iexact Hweak
+        · iintro HAU
+          simp only [if_neg (show ¬(((n' + 1 : Nat) : Int) = 0) from by grind)]
+          ibind
+          simp only [AtomicHeapAPI.cas]
+          iapply Conc.wpi_sync
+          iapply (wpi_aupd_choose (m := Mode.part) (hsub := by aupd_mask)) $$ HAU
+          iintro %pk2 HAlpha2
+          obtain ⟨n₂, k₂⟩ := pk2
+          icases HAlpha2 with ⟨HAuth2, HW2⟩
+          iunfold arcAuth at HAuth2
+          icases HAuth2 with ⟨%a₂, %v₂, %qs₂, Hphys2, Hpay2, Hown2⟩
+          iunfold isWeak at HW2
+          icases HW2 with ⟨Hmeta, Hweak⟩
+          ihave Hf2 : iprop(⌜a₂ = a' ∧ v₂ = v' ∧ 1 ≤ k₂⌝ ∗
+              (iOwn (F := ArcF T) γ (● res (some (a₂, v₂)) n₂ k₂ (shareOf n₂ qs₂)) ∗
+                arcMetaOwn γ a' v' ∗ arcWeakOwn (T := T) γ)) $$ [Hown2 Hmeta Hweak]
+          · iapply arc_isWeak_facts
+            isplitl [Hown2]
+            · iexact Hown2
+            · isplitl [Hmeta]
+              · iexact Hmeta
+              · iexact Hweak
+          icases Hf2 with ⟨%hf2, Hown2, Hmeta, Hweak⟩
+          obtain ⟨rfl, rfl, hpos2⟩ := hf2
+          simp only [physical_split a₂ n₂ k₂ (by grind)]
+          icases Hphys2 with ⟨Hs2, Hw2⟩
+          by_cases hne : n₂ = n' + 1
+          · subst hne
+            have hEq2 : arcAuth (GF := GF) (T := T) γ
+                  (if n' + 1 = 0 then 0 else n' + 1 + 1) k₂
+                = arcAuth (GF := GF) (T := T) γ (n' + 1 + 1) k₂ := by
+              rw [if_neg (show ¬((n' + 1) = 0) from by grind)]
+            iapply (HeapAPI.wpi_cas_succ (Hd := Hd) (m := Mode.part) (E := E) a₂.strong
+              (((n' + 1 : Nat) : Int)) (((n' + 1 : Nat) : Int) + 1))
+            iapply (AeneasIris.Step.lat_intro Mode.part _)
+            isplitl [Hs2]
+            · iexact Hs2
+            · iintro Hs2
+              iunfold arcMetaOwn at Hmeta
+              iunfold payloadOf at Hpay2
+              icases Hpay2 with ⟨%qr, %hsum, Hpd⟩
+              ihave Hpair : iprop(iOwn (F := ArcF T) γ
+                    (● res (some (a₂, v₂)) (n' + 1) k₂ (shareOf (n' + 1) qs₂)) ∗
+                  iOwn (F := ArcF T) γ (◯ res (some (a₂, v₂)) 0 0 none)) $$ [Hown2 Hmeta]
+              · isplitl [Hown2]
+                · iexact Hown2
+                · iexact Hmeta
+              imod (arc_update γ (some (a₂, v₂)) (some (a₂, v₂)) (n' + 1) k₂ 0 0
+                (n' + 1 + 1) k₂ 1 0 (shareOf (n' + 1) qs₂) none
+                ((some (qr.half, 1) : ArcShare) • some (qs₂, PosNat.ofSucc n'))
+                (some (qr.half, 1)) (by grind) (by grind)
+                (share_alloc qs₂ qr.half n'
+                  (by have h1 := congrArg Subtype.val hsum
+                      have h2 := qr.2
+                      simp only [Qp.val_add, Qp.val_half, Qp.val_one] at h1 ⊢
+                      grind))) $$ Hpair with ⟨Hown2, Hfrag⟩
+              ihave Hsplit : iprop(iOwn (F := ArcF T) γ (◯ res (some (a₂, v₂)) 0 0 none) ∗
+                  iOwn (F := ArcF T) γ (◯ res (T := T) none 1 0 (some (qr.half, 1))))
+                  $$ [Hfrag]
+              · iapply frag_split_s
+                iexact Hfrag
+              icases Hsplit with ⟨Hmeta2, Hstrong⟩
+              ihave HM : iprop(arcMetaOwn γ a₂ v₂ ∗ arcMetaOwn γ a₂ v₂) $$ [Hmeta2]
+              · iapply meta_dup
+                iunfold arcMetaOwn
+                iexact Hmeta2
+              icases HM with ⟨Hm1, Hm2⟩
+              ihave HD : iprop(pointsTo a₂.data (DFrac.own qr.half) v₂ ∗
+                  pointsTo a₂.data (DFrac.own qr.half) v₂) $$ [Hpd]
+              · iapply (data_split a₂ v₂ qr)
+                iexact Hpd
+              icases HD with ⟨Hd1, Hd2⟩
+              imodintro
+              iright
+              iexists ()
+              isplitl [Hs2 Hw2 Hd1 Hown2 Hm1 Hweak]
+              · isplitl [Hs2 Hw2 Hd1 Hown2]
+                · simp only [hEq2]
+                  iunfold arcAuth
+                  iexists a₂
+                  iexists v₂
+                  iexists (qs₂ + qr.half)
+                  isplitl [Hs2 Hw2]
+                  · simp only [physical_split a₂ (n' + 1 + 1) k₂ (by grind),
+                      wcell_of_ne (n' + 1 + 1) (n' + 1) k₂ (by grind) (by grind),
+                      Nat.cast_add, Nat.cast_one]
+                    isplitl [Hs2]
+                    · iexact Hs2
+                    · iexact Hw2
+                  · isplitl [Hd1]
+                    · iunfold payloadOf
+                      iexists qr.half
+                      isplitl []
+                      · ipureintro
+                        refine Subtype.ext ?_
+                        have h1 := congrArg Subtype.val hsum
+                        simp only [Qp.val_add, Qp.val_half, Qp.val_one] at h1 ⊢
+                        grind
+                      · iexact Hd1
+                    · simp only [share_alloc_eq]
+                      iexact Hown2
+                · iunfold isWeak
+                  isplitl [Hm1]
+                  · iexact Hm1
+                  · iexact Hweak
+              · iintro HΨ
+                simp only [reduceIte]
+                iret
+                iret
+                simp only [AtomicWpi.wandM_some,
+                  if_neg (show ¬((n' + 1) = 0) from by grind)]
+                iapply HΨ $$ %a₂
+                iunfold isArc
+                iexists qr.half
+                isplitl [Hm2]
+                · iexact Hm2
+                · isplitl [Hstrong]
+                  · iunfold arcStrongOwn
+                    iexact Hstrong
+                  · iexact Hd2
+          · iapply (HeapAPI.wpi_cas_fail (Hd := Hd) (m := Mode.part) (E := E) a₂.strong
+              ((n₂ : Int)) (((n' + 1 : Nat) : Int)) (((n' + 1 : Nat) : Int) + 1)
+              (DFrac.own 1) (by intro hc; exact hne (by exact_mod_cast hc)))
+            iapply (AeneasIris.Step.lat_intro Mode.part _)
+            isplitl [Hs2]
+            · iexact Hs2
+            · iintro Hs2
+              imodintro
+              ileft
+              isplitl [Hs2 Hw2 Hpay2 Hown2 Hmeta Hweak]
+              · isplitl [Hs2 Hw2 Hpay2 Hown2]
+                · iunfold arcAuth
+                  iexists a₂
+                  iexists v₂
+                  iexists qs₂
+                  isplitl [Hs2 Hw2]
+                  · simp only [physical_split a₂ n₂ k₂ (by grind)]
+                    isplitl [Hs2]
+                    · iexact Hs2
+                    · iexact Hw2
+                  · isplitl [Hpay2]
+                    · iexact Hpay2
+                    · iexact Hown2
+                · iunfold isWeak
+                  isplitl [Hmeta]
+                  · iexact Hmeta
+                  · iexact Hweak
+              · iintro HAU
+                simp only [Bool.false_eq_true, if_false]
+                iret
+                iapply IH $$ HAU
+
+
 theorem weak_strong_count_spec (γ : GName) (w : WeakHandle T) (v : T) :
     ⊢ isWeak γ w v -∗
       ⟪ ∀ n k, arcAuth (T := T) γ n k ⟫
@@ -1965,6 +2239,7 @@ noncomputable instance instArcAPI [stepH GF Mode.part -<ₕ Hd] :
   drop_strong_spec := drop_strong_spec
   weak_clone_spec := weak_clone_spec
   weak_upgrade_spec := weak_upgrade_spec
+  weak_upgrade_shared_spec := weak_upgrade_shared_spec
   weak_strong_count_spec := weak_strong_count_spec
   weak_drop_spec := weak_drop_spec
   dangling_clone_spec := dangling_clone_spec
