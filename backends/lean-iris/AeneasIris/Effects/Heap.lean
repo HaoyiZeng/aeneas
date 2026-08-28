@@ -327,6 +327,20 @@ theorem pointsToC_agree (l : Loc) (dq₁ dq₂ : DFrac) (st₁ st₂ : AccessSta
   unfold pointsToC
   exact ghost_map_elem_agree (GF := GF) (H := HMap) G.name l dq₁ dq₂ _ _
 
+/-- Full ownership of a cell is exclusive: `own 1 • own 1` is not a valid
+    `DFrac`, so no two clients can both hold one.  The companion to
+    `pointsToC_agree`, which gives agreement but says nothing about fractions. -/
+theorem pointsToC_excl (l : Loc) (st₁ st₂ : AccessState) (v₁ v₂ : Val.{u}) :
+    iprop(pointsToC l (DFrac.own 1) st₁ v₁ ∗ pointsToC l (DFrac.own 1) st₂ v₂)
+      ⊢@{IProp GF} iprop(False) := by
+  unfold pointsToC
+  iintro ⟨H₁, H₂⟩
+  ihave #hneQ : iprop(⌜l ≠ l⌝) $$ [H₁ H₂]
+  · iapply (ghost_map_elem_ne (GF := GF) (H := HMap) G.name l l (DFrac.own 1)
+      (st₁, v₁) (st₂, v₂)) $$ H₁ H₂
+  icases hneQ with %hne
+  exact absurd rfl hne
+
 variable {E : Effect.{u+1}} [StateE RustHeap.{u} -< E] [StepE -< E]
 variable {Hd : Handler E GF} [stateH heapInterp.{u} -<ₕ Hd]
 variable {m : Mode} [stepH GF m -<ₕ Hd]
